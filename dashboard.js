@@ -1,6 +1,6 @@
-import { PROVIDERS, queryProvider } from './providers.js?v=1.2';
-import { assess } from './assessment.js?v=1.2';
-import { visualSummary, visualBreakdown } from './visuals.js?v=1.2';
+import { PROVIDERS, queryProvider } from './providers.js?v=1.3';
+import { assess } from './assessment.js?v=1.3';
+import { visualSummary, visualBreakdown } from './visuals.js?v=1.3';
 
 const $=id=>document.getElementById(id);
 const state={records:[],target:null,expected:'',result:null,controller:null,observedAt:null,weights:Object.fromEntries(PROVIDERS.map(p=>[p.id,p.weight]))};
@@ -42,6 +42,7 @@ export async function runAssessment(){
   if(target&&!context.normalizeIP(target)){$('assessment-status').textContent='请输入有效公网 IPv4 或 IPv6 地址。';return;}
   if(expected&&!/^[A-Z]{2}$/.test(expected)){$('assessment-status').textContent='期望国家使用两位代码，如 JP；留空按多库共识评估。';return;}
   context.setBusy(true);state.controller=new AbortController();state.observedAt=new Date().toISOString();state.expected=expected;
+  window.scrollTo({top:0,left:0,behavior:'instant'});
   state.records=[];state.result=null;state.target=null;
   $('assessment-summary').replaceChildren(node('p','empty','正在识别测评目标并请求数据库…'));$('database-matrix').replaceChildren();
   $('score-panel').replaceChildren(node('p','empty','本轮查询进行中，等待数据库字段。'));

@@ -3,62 +3,31 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="一键查询多个 IP 数据库，以风险信号、位置对照与来源覆盖率，直观了解你的网络身份。">
-  <meta name="theme-color" content="#111b36">
+  <meta name="description" content="自动识别当前公网 IP，联合多个数据库检测网络属性、风险标记、地理归属及来源分歧。">
+  <meta name="theme-color" content="#0d1219">
+  <meta name="color-scheme" content="dark">
   <meta name="referrer" content="no-referrer">
-  <title>Egress · 网络身份观测</title>
+  <title>IP 质量检测 · Egress</title>
   <link rel="icon" href="./favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="./styles.css?v=1.2">
-  <link rel="stylesheet" href="./refinements.css?v=1.2">
-  <script type="module" src="./app.js?v=1.2"></script>
+  <link rel="stylesheet" href="./styles.css?v=1.3">
+  <script type="module" src="./app.js?v=1.3"></script>
 </head>
 <body>
-  <a class="skip-link" href="#main">跳到内容</a>
-  <aside class="sidebar">
-    <a class="brand" href="#overview" aria-label="Egress 首页"><svg class="brand-mark" viewBox="0 0 40 40" aria-hidden="true"><circle cx="20" cy="20" r="14"/><ellipse cx="20" cy="20" rx="6" ry="14"/><path d="M6 20h28M9 11h22M9 29h22"/></svg><span><strong>Egress<span>°</span></strong><small>网络身份观测</small></span></a>
-    <nav aria-label="主导航">
-      <a class="active" href="#overview" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></svg><span>总览</span></a>
-      <a href="#lookup"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="m15 15 6 6M7 10h6M10 7v6"/></svg><span>数据来源</span></a>
-      <a href="#score"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h16M6 15V9M12 15V4M18 15v-4"/></svg><span>评分解读</span></a>
-      <a href="#claude"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13h4l3-8 4 14 3-8h3"/></svg><span>Claude</span></a>
-      <a href="#sources"><svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 4 16 4 16 0V5M4 12c0 4 16 4 16 0"/></svg><span>来源档案</span></a>
-      <a href="#notes"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h14v18H5zM9 7h6M9 12h6M9 17h3"/></svg><span>方法</span></a>
-    </nav>
-    <div class="sidebar-bottom"><div class="privacy-mark"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 8 4v6c0 4-8 8-8 8s-8-4-8-8V7zM8 12l3 3 5-6"/></svg><span>结果在你的浏览器内</span></div><a href="https://github.com/BlackSlience-Reaper/egress-observatory" target="_blank" rel="noopener noreferrer">GitHub 源码 <span aria-hidden="true">↗</span></a><span class="sidebar-version">Egress v1.2</span></div>
-  </aside>
-  <div class="workspace">
-    <header class="topbar"><div class="breadcrumb"><span class="mobile-brand">Egress°</span><span class="desktop-breadcrumb">网络洞察 <span>/</span> 个人工作台</span></div><div class="topbar-meta"><span class="status-dot"></span> 按需检测 <span class="version">v1.2</span></div></header>
-    <main id="main">
-      <div class="page-heading"><div><h1 id="page-title">看清你的网络身份。</h1><p id="page-subtitle">多库交叉分析，让网络质量一目了然。</p></div><div class="heading-symbol" aria-hidden="true"><span></span><span></span><span></span></div></div>
-      <section id="overview" class="view" aria-label="综合测评">
-        <div class="assessment-hero">
-          <form id="assessment-form" class="assessment-form">
-            <div class="assessment-input-row"><label class="input-icon" for="assessment-ip"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M3 12h18"/></svg><span class="sr-only">测评 IP，留空使用当前出口</span></label><input id="assessment-ip" type="text" placeholder="输入 IP 地址，或留空检测当前网络" autocomplete="off" spellcheck="false" autocapitalize="off"><button id="start-assessment" type="submit">开始综合测评 <span aria-hidden="true">↗</span></button></div>
-            <div class="assessment-options"><div class="country-option"><label for="expected-country">期望国家</label><input id="expected-country" type="text" placeholder="可选，如 JP" maxlength="2" autocomplete="off" spellcheck="false" autocapitalize="characters"></div><label class="mask-control"><input id="mask-ip" type="checkbox" checked><span>隐藏 IP</span></label><div class="assessment-actions"><button id="cancel-assessment" class="text-button" type="button" disabled>取消本轮</button><button id="export-assessment" class="text-button" type="button">导出报告 <span aria-hidden="true">↓</span></button></div></div>
-          </form>
-          <p class="assessment-disclosure"><span aria-hidden="true">◉</span> 直接查询数据库，缺失字段保持未知。</p>
-        </div>
-        <div id="assessment-status" class="provider-progress" role="status" aria-live="polite">输入 IP 或直接开始，自动汇总多源结果。</div>
-        <div id="assessment-summary" class="visual-results assessment-grid"><div class="initial-preview"><div class="preview-orbit" aria-hidden="true"><svg viewBox="0 0 240 240"><defs><linearGradient id="preview-gradient" x1="0" x2="1" y1="0" y2="1"><stop stop-color="#4989ff"/><stop offset="1" stop-color="#9173f7"/></linearGradient></defs><circle class="preview-orbit-outer" cx="120" cy="120" r="104"/><circle class="preview-orbit-track" cx="120" cy="120" r="79"/><circle class="preview-orbit-line" cx="120" cy="120" r="79"/><circle class="preview-orbit-inner" cx="120" cy="120" r="52"/><path class="preview-wave" d="M90 122h17l8-18 12 34 9-16h15"/><circle class="preview-node" cx="120" cy="16" r="5"/><circle class="preview-node purple" cx="210" cy="172" r="5"/><circle class="preview-node blue" cx="30" cy="172" r="5"/></svg></div><div class="preview-copy"><span class="preview-label">一次查询，看见全貌</span><h2>从一个 IP 开始。</h2><p>风险信号、地区分歧、来源覆盖，<br>用直观的图形呈现每一项发现。</p><div class="preview-features"><span><i></i>多库交叉分析</span><span><i></i>保留数据出处</span><span><i></i>即时生成报告</span></div></div></div></div>
-        <div class="secondary-panels">
-          <details id="raw-data-details" class="disclosure-panel"><summary><span class="disclosure-icon" aria-hidden="true">≡</span><span>查看原始数据 <small>数据库对照</small></span><span class="disclosure-chevron" aria-hidden="true">⌄</span></summary><div class="disclosure-body"><div class="section-header"><h2>数据库字段对照</h2><span class="section-note">来源原始返回</span></div><div id="matrix-key" class="matrix-key"><span class="key-positive"><i aria-hidden="true"></i>命中</span><span class="key-negative"><i aria-hidden="true"></i>明确为否</span><span class="key-unknown"><i aria-hidden="true"></i>未提供</span><span class="matrix-scroll-hint">左右滑动查看全部字段 ↔</span></div><div id="database-matrix" class="matrix-wrap" role="region" aria-label="数据库字段对照，窄屏可横向滚动" aria-describedby="matrix-key" tabindex="0"><div class="empty"><p>测评完成后显示各库原始字段。</p></div></div></div></details>
-          <details id="weight-settings" class="disclosure-panel weight-settings"><summary><span class="disclosure-icon" aria-hidden="true">⌘</span><span>评分偏好 <small>调整来源权重</small></span><span class="disclosure-chevron" aria-hidden="true">⌄</span></summary><div id="weight-controls" class="disclosure-body"></div></details>
-          <details class="disclosure-panel browser-observation-details"><summary><span class="disclosure-icon" aria-hidden="true">◎</span><span>浏览器网络 <small>出口、分流与 WebRTC</small></span><span class="disclosure-chevron" aria-hidden="true">⌄</span></summary><div class="disclosure-body browser-observation-body">
-            <div class="toolbar"><div class="action-group"><button id="run-all" type="button">开始网络观测 <span aria-hidden="true">↗</span></button><button id="cancel-run" class="secondary" type="button" disabled>停止</button></div><button id="export-report" class="secondary" type="button">导出报告 <span aria-hidden="true">↓</span></button></div>
-            <div class="run-line"><span id="run-status" role="status" aria-live="polite">等待开始，页面不会自动发起检测请求。</span><span>观测时间 <time id="observed-at">—</time></span></div>
-            <div class="metrics-grid"><div class="metric"><span class="metric-label">当前 IPv4</span><div id="summary-ip" class="metric-value mono">待观测</div><p>浏览器访问所见出口</p></div><div class="metric"><span class="metric-label">出口一致性</span><div id="summary-route" class="metric-value">待对照</div><p>按目标保留结果</p></div><div class="metric"><span class="metric-label">Claude 网络</span><div id="summary-claude" class="metric-value">待观测</div><p>连接现象与官方状态</p></div><div class="metric"><span class="metric-label">数据来源</span><div id="summary-sources" class="metric-value">待观测</div><p>逐个来源，保留出处</p></div></div>
-            <div class="section-header"><h2>各目标所见出口</h2><span class="section-note">单次观测</span></div><p class="section-intro">请求 ipify、Cloudflare 与 IPPure，观察当前浏览器访问不同目标时的实际出口。</p><section id="endpoint-grid" class="result-grid" aria-label="出口检测结果"></section><div id="route-note" class="callout">等待多个有效样本。</div>
-            <div class="lower-grid"><section class="card browser-panel"><div class="section-header compact"><h2>浏览器环境</h2><span class="badge neutral">本地读取</span></div><div id="browser-facts" class="details"></div><p class="small muted">时区和语言作为环境线索，不参与综合评分。</p></section><section class="card webrtc-panel"><div class="section-header compact"><h2>WebRTC 观察</h2></div><p class="muted">运行时联系 Google STUN，查看浏览器暴露的候选地址。无需摄像头或麦克风权限。</p><button id="run-webrtc" class="secondary" type="button">运行 WebRTC 观察 ↗</button><div id="webrtc-result" class="small muted" role="status" aria-live="polite">尚未运行。</div></section></div>
-          </div></details>
-        </div>
-      </section>
-      <section id="lookup" class="view" aria-label="数据来源" hidden><div class="section-header"><h2>查询另一个 IP</h2><span class="badge neutral">多库自动对照</span></div><p class="section-intro">一次查询，自动进入综合测评并展示每个来源的结果。</p><form id="lookup-form" class="lookup-form card"><label for="ip-input">公网 IP <span class="muted">IPv4 / IPv6，留空使用当前出口</span></label><div class="input-action"><input id="ip-input" type="text" placeholder="输入 IP 地址，或留空" autocomplete="off" spellcheck="false" autocapitalize="off"><button id="lookup-submit" type="submit">查询与对照 ↗</button></div><p class="small muted">目标 IP 将发送给对应数据服务，请求路径由浏览器和代理配置决定。</p></form><div id="lookup-status" class="run-line" role="status" aria-live="polite">等待查询。</div><div id="lookup-results" class="result-grid"></div></section>
-      <section id="score" class="view" aria-label="评分解读" hidden><div class="section-header"><h2>读懂每一项贡献</h2><span class="badge neutral">自动结果解释</span></div><p class="section-intro">展示本轮字段、来源贡献与计算细则。缺失字段保持未知，覆盖率单独计算。</p><div id="score-panel"><div class="empty"><span class="empty-symbol" aria-hidden="true">◌</span><h3>等待一次测评</h3><p>完成后自动展示各维度与来源的贡献。</p></div></div></section>
-      <section id="claude" class="view" aria-label="Claude 观测" hidden><div class="section-header"><h2>了解 Claude 的连接状态</h2><span class="badge neutral">公开网络信号</span></div><p class="section-intro">分别观察目标请求、浏览器出口与官方服务状态。</p><div class="claude-intro card"><div class="claude-monogram" aria-hidden="true">✳</div><div><h3>从连接现象开始</h3><p>浏览器跨域限制可能使响应不可读；opaque 响应无法判定服务解锁或账户可用。</p></div><button id="run-claude" type="button">开始 Claude 观测 ↗</button></div><div id="claude-note" class="callout">观测不提交账户信息或调用付费模型；实际对话需在 Claude 中确认。</div><div id="claude-results" class="result-grid"><div class="empty"><p>尚未发起连接观测。</p></div></div><div class="section-header"><h2>官方入口</h2></div><div class="reference-links"><a href="https://status.claude.com/" target="_blank" rel="noopener noreferrer"><span>服务状态<small>全局故障与维护</small></span><span>↗</span></a><a href="https://claude.ai/" target="_blank" rel="noopener noreferrer"><span>Claude 网页<small>确认实际对话行为</small></span><span>↗</span></a><a href="https://www.anthropic.com/supported-countries" target="_blank" rel="noopener noreferrer"><span>支持地区<small>以当前官方说明为准</small></span><span>↗</span></a></div></section>
-      <section id="sources" class="view" aria-label="来源档案" hidden><div class="section-header"><h2>数据从哪里来</h2><span id="source-count" class="badge neutral">来源目录</span></div><p class="section-intro">查询字段、接口能力和访问限制，为每个来源保留出处。</p><div class="source-tools"><label class="search-field"><span aria-hidden="true">⌕</span><input id="source-search" type="search" placeholder="搜索网站、数据库或用途" aria-label="搜索来源" autocomplete="off"></label><div id="source-filters" class="filters" aria-label="来源分类"><button class="filter active" data-filter="all" type="button">全部</button><button class="filter" data-filter="history" type="button">历史使用</button><button class="filter" data-filter="api" type="button">自动接口</button><button class="filter" data-filter="database" type="button">数据库</button><button class="filter" data-filter="diagnostic" type="button">专项检测</button></div></div><div id="source-grid" class="source-grid"></div></section>
-      <section id="notes" class="view" aria-label="方法" hidden><div class="section-header"><h2>结论背后的方法</h2><span class="badge neutral">方法与边界</span></div><p class="section-intro">来自实际配置与排查的观察，解释数据能够回答的问题。</p><div id="experience-list" class="experience-list"></div><section class="privacy-panel card"><h2>数据如何流动</h2><div class="privacy-grid"><div><h3>由你启动</h3><p>点击后才请求第三方服务。页面无账号系统或分析追踪；查询 IP 会发送给对应来源。</p></div><div><h3>报告留在本地</h3><p>报告由浏览器生成，默认隐藏 IP。GitHub Pages 和数据服务各自处理访问日志，本站无自建收集端。</p></div><div><h3>以实际路径为准</h3><p>静态网页无法强制 DIRECT 或指定代理；浏览器结果仅覆盖本轮请求。</p></div></div></section></section>
-      <footer class="footer"><span>Egress° <span>网络身份观测</span></span><span>观测结果只描述本次测量范围。</span><a href="https://github.com/BlackSlience-Reaper/egress-observatory" target="_blank" rel="noopener noreferrer">v1.2 · GitHub ↗</a></footer>
-    </main>
-  </div>
+  <a class="skip-link" href="#main">跳到检测内容</a>
+  <main id="main" class="ip-page">
+    <header class="page-header">
+      <div class="page-heading"><div class="brand-line"><span class="brand-symbol" aria-hidden="true">◈</span><span>Egress</span><span class="brand-separator">/</span><span>网络工具</span></div><h1 id="page-title">IP 质量检测</h1></div>
+      <div class="query-panel"><form id="assessment-form"><label class="sr-only" for="assessment-ip">当前 IP 自动识别，可输入其他公网 IPv4 或 IPv6</label><input id="assessment-ip" type="text" placeholder="正在识别当前 IP…" autocomplete="off" spellcheck="false" autocapitalize="off"><button id="start-assessment" type="submit">查询</button></form><div class="query-options"><span class="query-hint">自动填入当前公网 IP</span><label class="mask-control"><input id="mask-ip" type="checkbox" checked><span>隐藏 IP</span></label><button id="cancel-assessment" class="text-button" type="button" disabled>取消</button><button id="export-assessment" class="text-button" type="button">导出 <span aria-hidden="true">↗</span></button></div></div>
+      <p class="page-description">多库交叉检测，查看网络属性、风险标记与归属分歧。</p>
+    </header>
+    <div id="assessment-status" class="assessment-status" role="status" aria-live="polite">正在识别当前出口；识别完成后可直接查询。</div>
+    <section id="assessment-summary" aria-label="IP 检测结果"><div class="empty-state"><span class="empty-symbol" aria-hidden="true">◎</span><div><h2>准备检测当前网络</h2><p>点击查询，显示 IP 质量、风险信号和各来源结果。</p></div></div></section>
+    <div class="detail-sections">
+      <details id="raw-data-details" class="detail-panel"><summary><span>原始数据 <small>逐库字段对照</small></span><span class="chevron" aria-hidden="true">⌄</span></summary><div class="detail-content"><div class="matrix-help"><span><i class="dot-hit"></i>命中</span><span><i class="dot-clear"></i>明确为否</span><span><i class="dot-unknown"></i>未提供</span><span class="scroll-hint">横向滑动查看全部字段 ↔</span></div><div id="database-matrix" class="matrix-wrap" role="region" aria-label="数据库原始字段，窄屏可横向滚动" tabindex="0"><p class="empty-detail">等待本轮查询结果。</p></div></div></details>
+      <details id="weight-settings" class="detail-panel"><summary><span>评分设置 <small>来源权重与地区偏好</small></span><span class="chevron" aria-hidden="true">⌄</span></summary><div class="detail-content"><div class="country-setting"><label for="expected-country">期望国家</label><input id="expected-country" type="text" placeholder="可选，如 JP" maxlength="2" autocomplete="off" spellcheck="false" autocapitalize="characters"><span>留空按多库共识评估</span></div><div id="weight-controls"></div></div></details>
+      <details class="detail-panel"><summary><span>检测方法 <small>评分依据与数据归属</small></span><span class="chevron" aria-hidden="true">⌄</span></summary><div class="detail-content"><div id="score-panel"><p class="empty-detail">查询后显示本轮评分维度与来源贡献。</p></div></div></details>
+    </div>
+    <footer><span>未知字段保持缺失，检测结果描述本轮观测。</span><a href="https://github.com/BlackSlience-Reaper/egress-observatory" target="_blank" rel="noopener noreferrer">Egress · GitHub ↗</a></footer>
+  </main>
 </body>
 </html>
