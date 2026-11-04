@@ -11,3 +11,5 @@
 @media(max-width:420px){.overview-identity>.mono{font-size:19px}.overview-identity>.country-chip{font-size:10px;min-width:28px;padding:3px 5px}.overview-identity>span:last-child{font-size:11px}.ip-overview-bar{padding:14px;gap:13px}.quality-scale,.quality-scale small{font-size:9px}.score-badge{font-size:20px;padding:6px 8px}.section-caption,.provider-strip .result-topline h3{font-size:12px}.identity-card>.section-caption{margin-top:17px}.identity-card>.location-comparison{margin-top:16px;padding-top:16px}.provider-strip.card{padding:13px}.provider-strip .result-topline>span{font-size:10px}.report-dialog{padding:18px!important}.report-dialog .report-download,.report-dialog a[download]{font-size:12px;min-height:36px}}
 
 .mask-control input[type=checkbox]{min-height:14px;height:14px;min-width:26px;width:26px;flex:0 0 26px;align-self:center}
+
+html{overflow-anchor:none}
