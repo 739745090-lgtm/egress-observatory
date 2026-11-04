@@ -1,29 +1,53 @@
-/** Cloudflare Worker ESM. Secrets are supplied only through runtime env bindings. */
+/**
+ * Egress API — Cloudflare Worker ESM (also runs on Sites). Secrets come only from runtime env bindings:
+ *   PROXYCHECK_API_KEY, TURNSTILE_SECRET_KEY, RECAPTCHA_SECRET_KEY, ABUSEIPDB_API_KEY (optional), CF_RADAR_TOKEN (optional)
+ * Optional ALLOWED_ORIGIN: one exact https origin (default GitHub Pages). Local dev origins on :4187 are always allowed.
+ */
 const DEFAULT_ORIGIN = 'https://blackslience-reaper.github.io';
+const DEV_ORIGINS = new Set(['http://127.0.0.1:4187', 'http://localhost:4187']);
+const API_VERSION = 3;
 const CACHE_SECONDS = 600;
 const RATE_WINDOW_MS = 60_000;
-const RATE_LIMIT = 10;
+const RATE_LIMIT = 30;
 const MAX_CALLER_BUCKETS = 10_000;
+const UPSTREAM_TIMEOUT = 12_000;
 const callers = new Map();
+// Small free quotas: keep their answers longer.
+const CACHE_FOR = Object.freeze({ ipqs: 6 * 3600, abuseipdb: 3600, ipregistry: 6 * 3600, ipdata: 3600, greynoise: 6 * 3600, crowdsec: 6 * 3600, getipintel: 6 * 3600, scamalytics: 6 * 3600, virustotal: 6 * 3600 });
 let lastSweep = 0;
-const ROUTES = Object.freeze({ '/v1/proxycheck': 'proxycheck', '/v1/dbip': 'dbip', '/v1/ip2location': 'ip2location' });
-const PROVIDER_META = Object.freeze({
-  proxycheck: { name: 'Proxycheck', database: 'Proxycheck', weight: 20,
-    attribution: 'Selected network classifications supplied by proxycheck.io, normalized for the multi-source assessment.',
-    attributionUrl: 'https://proxycheck.io/', sourceUrl: 'https://proxycheck.io/api/' },
-  dbip: { name: 'DB-IP', database: 'DB-IP', weight: 20,
-    attribution: 'IP Geolocation by DB-IP. Public free server API; 500 daily queries.',
-    attributionUrl: 'https://db-ip.com/', sourceUrl: 'https://db-ip.com/api/free' },
-  ip2location: { name: 'IP2Location.io', database: 'IP2Location', weight: 25,
-    attribution: 'Egress Observatory uses IP2Location.io IP geolocation web service.',
-    attributionUrl: 'https://www.ip2location.io', sourceUrl: 'https://www.ip2location.io/ip2location-documentation' },
+
+const LOOKUPS = Object.freeze({
+  '/v1/proxycheck': 'proxycheck', '/v1/dbip': 'dbip', '/v1/ip2location': 'ip2location', '/v1/ipapi': 'ipapi', '/v1/abuseipdb': 'abuseipdb', '/v1/ipqs': 'ipqs', '/v1/ipinfo': 'ipinfo', '/v1/ipregistry': 'ipregistry', '/v1/ipdata': 'ipdata',
+  '/v1/greynoise': 'greynoise', '/v1/crowdsec': 'crowdsec', '/v1/vpnapi': 'vpnapi', '/v1/iphub': 'iphub', '/v1/getipintel': 'getipintel',
+  '/v1/scamalytics': 'scamalytics', '/v1/virustotal': 'virustotal', '/v1/ipapiis': 'ipapiis',
 });
+const META = Object.freeze({
+  proxycheck: { name: 'Proxycheck', attribution: 'Selected classifications by proxycheck.io.' },
+  dbip: { name: 'DB-IP', attribution: 'IP Geolocation by DB-IP.' },
+  ip2location: { name: 'IP2Location.io', attribution: 'IP geolocation by IP2Location.io.' },
+  ipapi: { name: 'ip-api.com', attribution: 'Geolocation by ip-api.com.' },
+  abuseipdb: { name: 'AbuseIPDB', attribution: 'Abuse reports by AbuseIPDB.' },
+  ipqs: { name: 'IPQualityScore', attribution: 'Fraud scoring by IPQualityScore.' },
+  ipinfo: { name: 'IPinfo', attribution: 'IP data by IPinfo.' },
+  ipregistry: { name: 'IPRegistry', attribution: 'IP data by Ipregistry.' },
+  ipdata: { name: 'IPData', attribution: 'IP data by ipdata.co.' },
+  greynoise: { name: 'GreyNoise', attribution: 'Internet noise data by GreyNoise.' },
+  crowdsec: { name: 'CrowdSec CTI', attribution: 'Threat intelligence by CrowdSec.' },
+  vpnapi: { name: 'vpnapi.io', attribution: 'VPN detection by vpnapi.io.' },
+  iphub: { name: 'IPHub', attribution: 'Proxy detection by IPHub.' },
+  getipintel: { name: 'GetIPIntel', attribution: 'Proxy probability by GetIPIntel.' },
+  scamalytics: { name: 'Scamalytics', attribution: 'Fraud scoring by Scamalytics.' },
+  virustotal: { name: 'VirusTotal', attribution: 'Reputation by VirusTotal.' },
+  ipapiis: { name: 'ipapi.is', attribution: 'IP data by ipapi.is.' },
+});
+
+// ---------- input validation ----------
 
 function canonicalIP(value) {
   if (typeof value !== 'string' || value.length > 45 || value !== value.trim()) return null;
   if (/^(0|[1-9]\d{0,2})(\.(0|[1-9]\d{0,2})){3}$/.test(value)) {
     const parts = value.split('.').map(Number);
-    return parts.every((part) => part <= 255) ? parts.join('.') : null;
+    return parts.every(part => part <= 255) ? parts.join('.') : null;
   }
   if (!value.includes(':') || !/^[a-fA-F0-9:.]+$/.test(value)) return null;
   try { return new URL(`http://[${value}]/`).hostname.replace(/^\[|\]$/g, '').toLowerCase(); }
@@ -46,16 +70,23 @@ function publicIP(value) {
   const halves = ip.split('::');
   const left = halves[0] ? halves[0].split(':') : [];
   const right = halves[1] ? halves[1].split(':') : [];
-  const words = (halves.length === 2 ? [...left, ...Array(8 - left.length - right.length).fill('0'), ...right] : left).map((word) => Number.parseInt(word, 16));
-  if (words.length !== 8 || words.some((word) => !Number.isInteger(word))) return null;
+  const words = (halves.length === 2 ? [...left, ...Array(8 - left.length - right.length).fill('0'), ...right] : left).map(word => Number.parseInt(word, 16));
+  if (words.length !== 8 || words.some(word => !Number.isInteger(word))) return null;
   const special = (words[0] & 0xe000) !== 0x2000
     || (words[0] === 0x2001 && (words[1] < 0x200 || words[1] === 0xdb8))
     || words[0] === 0x2002 || (words[0] === 0x3fff && (words[1] & 0xf000) === 0);
   return special ? null : ip;
 }
 
-function allowedOrigin(env, requestedOrigin = null) {
-  if (requestedOrigin === 'http://127.0.0.1:4187' || requestedOrigin === 'http://localhost:4187') return requestedOrigin;
+const text = value => typeof value === 'string' && value.trim() ? value.trim().slice(0, 200) : null;
+const bool = value => typeof value === 'boolean' ? value : null;
+const num = value => typeof value === 'number' && Number.isFinite(value) ? value : (typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value)) ? Number(value) : null);
+const secret = value => typeof value === 'string' && value.trim() ? value.trim() : '';
+
+// ---------- origin, CORS, responses ----------
+
+function allowedOrigin(env, requested) {
+  if (requested && DEV_ORIGINS.has(requested)) return requested;
   const value = env.ALLOWED_ORIGIN === undefined ? DEFAULT_ORIGIN : String(env.ALLOWED_ORIGIN);
   try {
     const url = new URL(value);
@@ -64,43 +95,48 @@ function allowedOrigin(env, requestedOrigin = null) {
   } catch { return null; }
 }
 
-function responseHeaders(origin, extra = {}) {
-  const headers = new Headers({
-    'Content-Type': 'application/json; charset=utf-8',
-    'Cache-Control': 'private, no-store',
-    'X-Content-Type-Options': 'nosniff',
-    'Vary': 'Origin',
-    ...extra,
-  });
+function headers(origin, extra = {}) {
+  const result = new Headers({ 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff', Vary: 'Origin', ...extra });
   if (origin) {
-    headers.set('Access-Control-Allow-Origin', origin);
-    headers.set('Access-Control-Allow-Credentials', 'true');
-    headers.set('Access-Control-Expose-Headers', 'Retry-After, X-Data-Cache');
+    result.set('Access-Control-Allow-Origin', origin);
+    result.set('Access-Control-Expose-Headers', 'Retry-After, X-Data-Cache');
   }
-  return headers;
+  return result;
 }
 
-function json(body, status, origin, extra) {
-  return new Response(JSON.stringify(body), { status, headers: responseHeaders(origin, extra) });
+const json = (body, status, origin, extra) => new Response(JSON.stringify(body), { status, headers: headers(origin, extra) });
+
+function failure(status, code, message, origin, extra = {}) {
+  return json({ status: 'error', errorCode: code, error: message, ...extra }, status, origin, extra.retryAfterSeconds ? { 'Retry-After': String(extra.retryAfterSeconds) } : {});
 }
 
-function emptyRecord(ip = null, providerId = 'proxycheck') {
-  const provider = PROVIDER_META[providerId];
-  return {
-    providerId, providerName: provider.name, database: provider.database, kind: 'database', weight: provider.weight,
-    ip, observedAt: new Date().toISOString(), duration: 0,
-    country: null, city: null, asn: null, org: null, networkType: null,
-    flags: { vpn: null, proxy: null, tor: null, relay: null, hosting: null, abuser: null, bogon: null },
-    fieldSources: { flags: {} }, targetMatch: null,
-    status: 'error', error: null, errorCode: null,
-    attribution: provider.attribution, attributionUrl: provider.attributionUrl, sourceUrl: provider.sourceUrl,
-  };
+function enabledRoutes(env) {
+  const routes = ['dbip', 'ip2location', 'ipapi'];
+  if (secret(env.PROXYCHECK_API_KEY)) routes.unshift('proxycheck');
+  if (secret(env.ABUSEIPDB_API_KEY)) routes.push('abuseipdb');
+  if (secret(env.IPQS_API_KEY)) routes.push('ipqs');
+  if (secret(env.IPINFO_TOKEN)) routes.push('ipinfo');
+  if (secret(env.IPREGISTRY_API_KEY)) routes.push('ipregistry');
+  if (secret(env.IPDATA_API_KEY)) routes.push('ipdata');
+  if (secret(env.GREYNOISE_API_KEY)) routes.push('greynoise');
+  if (secret(env.CROWDSEC_CTI_KEY)) routes.push('crowdsec');
+  if (secret(env.VPNAPI_KEY)) routes.push('vpnapi');
+  if (secret(env.IPHUB_KEY)) routes.push('iphub');
+  if (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(secret(env.GETIPINTEL_CONTACT))) routes.push('getipintel');
+  if (secret(env.SCAMALYTICS_USER) && secret(env.SCAMALYTICS_KEY)) routes.push('scamalytics');
+  if (secret(env.VT_API_KEY)) routes.push('virustotal');
+  if (secret(env.IPAPI_IS_KEY)) routes.push('ipapiis');
+  if (secret(env.CF_RADAR_TOKEN)) routes.push('radar');
+  if (secret(env.TURNSTILE_SECRET_KEY)) routes.push('turnstile-verify');
+  if (secret(env.RECAPTCHA_SECRET_KEY)) routes.push('recaptcha-verify');
+  return routes;
 }
 
-function failure(status, code, message, origin, ip = null, retryAfter = null, providerId = 'proxycheck') {
-  const payload = { ...emptyRecord(ip, providerId), errorCode: code, error: message };
-  if (retryAfter !== null) payload.retryAfterSeconds = retryAfter;
-  return json(payload, status, origin, retryAfter === null ? {} : { 'Retry-After': String(retryAfter) });
+// ---------- rate limit (per caller, per isolate, in memory) ----------
+
+function trustedCaller(request) {
+  // CF-Connecting-IP is trusted only when the platform supplied request.cf metadata.
+  return request.cf ? canonicalIP(request.headers.get('CF-Connecting-IP')) : null;
 }
 
 function takeRateSlot(request) {
@@ -109,10 +145,7 @@ function takeRateSlot(request) {
     for (const [key, bucket] of callers) if (bucket.expires <= now) callers.delete(key);
     lastSweep = now;
   }
-  // CF-Connecting-IP is trusted only when the platform supplied request.cf metadata.
-  // X-Forwarded-For, X-Real-IP, query parameters, and caller-supplied identifiers are ignored.
-  const trustedAddress = request.cf ? canonicalIP(request.headers.get('CF-Connecting-IP')) : null;
-  const key = trustedAddress || 'unknown-caller';
+  const key = trustedCaller(request) || 'unknown-caller';
   let bucket = callers.get(key);
   if (!bucket || bucket.expires <= now) {
     if (!bucket && callers.size >= MAX_CALLER_BUCKETS) return { allowed: false, retryAfter: 60 };
@@ -124,198 +157,520 @@ function takeRateSlot(request) {
   return { allowed: true };
 }
 
-const text = (value) => typeof value === 'string' && value.trim() ? value.trim().slice(0, 200) : null;
-const bool = (value) => typeof value === 'boolean' ? value : null;
+// ---------- upstream fetch ----------
 
-function selectFields(data, ip, duration) {
-  if (!data || typeof data !== 'object' || !['ok', 'warning'].includes(data.status)) return null;
-  const entries = Object.entries(data).filter(([key]) => canonicalIP(key) !== null);
-  if (entries.length !== 1 || canonicalIP(entries[0][0]) !== ip) return null;
-  const item = entries[0][1];
-  if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
-  const flags = { ...emptyRecord().flags,
-    vpn: bool(item.detections?.vpn), proxy: bool(item.detections?.proxy),
-    tor: bool(item.detections?.tor), hosting: bool(item.detections?.hosting),
-  };
-  const rawType = text(item.network?.type)?.toLowerCase();
-  const networkTypes = { residential: 'residential', isp: 'isp', 'fixed line isp': 'isp', mobile: 'mobile', 'mobile isp': 'mobile', business: 'business', hosting: 'hosting' };
-  const networkType = flags.hosting === true ? 'hosting' : networkTypes[rawType] || null;
-  const rawASN = text(item.network?.asn);
-  const country = text(item.location?.country_code);
-  const selected = {
-    ...emptyRecord(ip), status: 'success', duration,
-    country: country && /^[a-z]{2}$/i.test(country) ? country.toUpperCase() : null,
-    city: text(item.location?.city_name),
-    asn: rawASN && /^AS\d+$/i.test(rawASN) ? rawASN.toUpperCase() : null,
-    org: text(item.network?.organisation) || text(item.network?.provider), networkType, flags,
-    targetMatch: 'exact-ip', upstreamWarning: data.status === 'warning',
-  };
-  for (const field of ['country', 'city', 'asn', 'org', 'networkType']) if (selected[field] !== null) selected.fieldSources[field] = 'proxycheck';
-  for (const [flag, value] of Object.entries(flags)) if (value !== null) selected.fieldSources.flags[flag] = 'proxycheck';
-  return selected;
-}
-
-function safeRetryAfter(response) {
+function retryAfter(response) {
   const raw = response.headers.get('Retry-After');
-  if (raw && /^\d{1,6}$/.test(raw)) return Math.max(1, Math.min(86400, Number(raw)));
-  return 60;
+  return raw && /^\d{1,6}$/.test(raw) ? Math.max(1, Math.min(86400, Number(raw))) : 60;
 }
 
-async function getUpstream(ip, key) {
-  const started = performance.now();
+async function upstream(url, init, name) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 12_000);
+  const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT);
+  const started = Date.now();
   try {
-    const upstreamURL = new URL(`https://proxycheck.io/v3/${encodeURIComponent(ip)}`);
-    upstreamURL.searchParams.set('key', key);
-    upstreamURL.searchParams.set('tag', '0');
-    // No user-controlled host, forwarded cookies, Origin, or authorization headers.
-    const response = await fetch(upstreamURL, {
-      method: 'GET', redirect: 'manual', headers: { Accept: 'application/json' },
-      signal: controller.signal,
-    });
-    if(response.status>=300&&response.status<400)return {status:502,code:'upstream-redirect',message:'上游返回重定向，授权请求未被转发。'};
-    if (response.status === 429) return { status: 429, code: 'upstream-rate-limit', message: 'Proxycheck 额度或速率受限，请等待重置。', retryAfter: safeRetryAfter(response) };
-    if (response.status === 401 || response.status === 403) return { status: 502, code: 'upstream-access-denied', message: 'Proxycheck 拒绝了服务端授权请求。' };
-    if (!response.ok) return { status: 502, code: 'upstream-http-error', message: 'Proxycheck 暂时未返回可用数据。' };
+    // Fixed upstream hosts only; no visitor cookies, Origin or authorization headers are forwarded.
+    const response = await fetch(url, { redirect: 'manual', ...init, signal: controller.signal });
+    if (response.status >= 300 && response.status < 400) return { error: { status: 502, code: 'upstream-redirect', message: `${name} 返回重定向，请求未继续。` } };
+    if (response.status === 429) return { error: { status: 429, code: 'upstream-rate-limit', message: `${name} 额度或频率受限。`, retryAfter: retryAfter(response) } };
+    if (response.status === 401 || response.status === 403) return { error: { status: 502, code: 'upstream-access-denied', message: `${name} 拒绝了服务端授权。` } };
+    if (!response.ok) return { error: { status: 502, code: 'upstream-http-error', message: `${name} 暂时不可用。`, httpStatus: response.status } };
     let data;
     try { data = await response.json(); }
-    catch {
-      return controller.signal.aborted
-        ? { status: 504, code: 'upstream-timeout', message: 'Proxycheck 请求超过 12 秒。' }
-        : { status: 502, code: 'upstream-invalid-json', message: 'Proxycheck 响应格式异常。' };
-    }
-    if (data?.status === 'warning' && /disabled|invalid.{0,12}key|revoked/i.test(String(data.message || ''))) {
-      return { status: 502, code: 'upstream-key-unavailable', message: 'Proxycheck 的服务端授权当前不可用。' };
-    }
-    const record = selectFields(data, ip, Math.round(performance.now() - started));
-    if (!record) return { status: 502, code: 'upstream-target-or-schema', message: '上游目标或响应格式不匹配，结果已弃用。' };
-    return { record };
-  } catch (error) {
-    return controller.signal.aborted
-      ? { status: 504, code: 'upstream-timeout', message: 'Proxycheck 请求超过 12 秒。' }
-      : { status: 502, code: /cache/i.test(String(error?.message))?'runtime-cache-option':'upstream-network', message: 'Proxycheck 网络请求未完成。' };
-  } finally { clearTimeout(timeout); }
-}
-
-function selectPublicFields(providerId, data, ip, duration) {
-  if (!data || typeof data !== 'object' || Array.isArray(data) || data.error || data.errorCode) return null;
-  const returnedIP = providerId === 'dbip' ? data.ipAddress : data.ip;
-  if (canonicalIP(returnedIP) !== ip) return null;
-  const selected = { ...emptyRecord(ip, providerId), status: 'success', duration, targetMatch: 'exact-ip' };
-  const country = text(providerId === 'dbip' ? data.countryCode : data.country_code);
-  selected.country = country && /^[a-z]{2}$/i.test(country) ? country.toUpperCase() : null;
-  selected.city = text(providerId === 'dbip' ? data.city : data.city_name);
-  if (providerId === 'ip2location') {
-    const rawASN = typeof data.asn === 'number' ? String(data.asn) : text(data.asn);
-    const match = rawASN?.match(/^(?:AS)?(\d{1,10})$/i);
-    selected.asn = match && Number(match[1]) <= 4294967295 ? `AS${match[1]}` : null;
-    selected.org = text(data.as);
-    // The keyless plan exposes only basic open-proxy classification, not VPN/Tor/hosting.
-    selected.flags.proxy = bool(data.is_proxy);
-  }
-  for (const field of ['country', 'city', 'asn', 'org']) if (selected[field] !== null) selected.fieldSources[field] = providerId;
-  for (const [flag, value] of Object.entries(selected.flags)) if (value !== null) selected.fieldSources.flags[flag] = providerId;
-  return selected;
-}
-
-async function getPublicUpstream(providerId, ip) {
-  const name = PROVIDER_META[providerId].name;
-  const started = performance.now();
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 12_000);
-  try {
-    // Documented, keyless server-to-server lookup. No browser headers or caller-IP spoofing.
-    const upstreamURL = providerId === 'dbip'
-      ? new URL(`https://api.db-ip.com/v2/free/${encodeURIComponent(ip)}`)
-      : new URL(`https://api.ip2location.io/?ip=${encodeURIComponent(ip)}`);
-    const response = await fetch(upstreamURL, {
-      method: 'GET', redirect: 'manual', headers: { Accept: 'application/json' }, signal: controller.signal,
-    });
-    if (response.status >= 300 && response.status < 400) return { status: 502, code: 'upstream-redirect', message: `${name} 返回重定向，请求未继续转发。` };
-    if (response.status === 429) return { status: 429, code: 'upstream-rate-limit', message: `${name} 免费额度或速率受限，请等待重置。`, retryAfter: safeRetryAfter(response) };
-    if (response.status === 401 || response.status === 403) return { status: 502, code: 'upstream-access-denied', message: `${name} 拒绝了当前免费接口请求。` };
-    if (!response.ok) return { status: 502, code: 'upstream-http-error', message: `${name} 暂时未返回可用数据。` };
-    let data;
-    try { data = await response.json(); }
-    catch {
-      return controller.signal.aborted
-        ? { status: 504, code: 'upstream-timeout', message: `${name} 请求超过 12 秒。` }
-        : { status: 502, code: 'upstream-invalid-json', message: `${name} 响应格式异常。` };
-    }
-    if (providerId === 'dbip' && data?.errorCode === 'OVER_QUERY_LIMIT') {
-      return { status: 429, code: 'upstream-daily-quota', message: 'DB-IP 免费日额度已用尽，已停止请求。', retryAfter: 86400 };
-    }
-    if (providerId === 'ip2location' && Number(data?.error?.error_code) === 10000) {
-      const now = Date.now();
-      const nextUTC = Math.floor(now / 86400000) * 86400000 + 86400000;
-      return { status: 429, code: 'upstream-quota-or-access', message: 'IP2Location.io 匿名额度或访问资格受限，已停止请求。', retryAfter: Math.max(1, Math.ceil((nextUTC - now) / 1000)) };
-    }
-    if (data?.error || data?.errorCode) return { status: 502, code: 'upstream-service-error', message: `${name} 拒绝了本次查询，结果未纳入评分。` };
-    const record = selectPublicFields(providerId, data, ip, Math.round(performance.now() - started));
-    if (!record) return { status: 502, code: 'upstream-target-or-schema', message: `${name} 返回目标或格式不匹配，结果已弃用。` };
-    return { record };
+    catch { return { error: { status: 502, code: 'upstream-invalid-json', message: `${name} 响应格式异常。` } }; }
+    return { data, ms: Date.now() - started };
   } catch {
-    return controller.signal.aborted
-      ? { status: 504, code: 'upstream-timeout', message: `${name} 请求超过 12 秒。` }
-      : { status: 502, code: 'upstream-network', message: `${name} 网络请求未完成。` };
-  } finally { clearTimeout(timeout); }
+    return { error: controller.signal.aborted ? { status: 504, code: 'upstream-timeout', message: `${name} 请求超时。` } : { status: 502, code: 'upstream-network', message: `${name} 网络请求未完成。` } };
+  } finally { clearTimeout(timer); }
 }
+
+/**
+ * Usage type (how the IP is used) and company type (who owns it), normalized across providers:
+ * residential | mobile | business | hosting | education | government. Unknown stays null.
+ */
+function usage(value) {
+  const raw = String(value ?? '').trim().toLowerCase();
+  if (!raw) return null;
+  if (/^(isp|fixed line isp|residential|cable\/dsl\/isp|dsl|res)$/.test(raw) || raw === 'isp/mob' || raw.includes('fixed line')) return raw.includes('mob') ? 'mobile' : 'residential';
+  if (/(^mob$|mobile|wireless|cellular)/.test(raw)) return 'mobile';
+  if (/(^dch$|data ?center|hosting|web hosting|transit|^cdn$|content delivery|^ses$|search engine|cloud)/.test(raw)) return 'hosting';
+  if (/(^com$|^org$|business|commercial|corporate|organization|enterprise)/.test(raw)) return 'business';
+  if (/(^edu$|^lib$|education|university|college|school|library|^edu)/.test(raw)) return 'education';
+  if (/(^gov$|^mil$|government|military)/.test(raw)) return 'government';
+  return null;
+}
+
+function record(providerId, ip, fields) {
+  return {
+    providerId, providerName: META[providerId].name, status: 'success', ip, observedAt: new Date().toISOString(),
+    country: null, region: null, city: null, lat: null, lon: null, timezone: null, asn: null, org: null, hostname: null,
+    networkType: null, usageType: null, companyType: null, risk: null, flags: { vpn: null, proxy: null, tor: null, relay: null, hosting: null, abuser: null, crawler: null, mobile: null, bogon: null },
+    attribution: META[providerId].attribution, ...fields,
+  };
+}
+
+const country = value => { const code = text(value); return code && /^[a-z]{2}$/i.test(code) ? code.toUpperCase() : null; };
+const asn = value => { const match = String(value ?? '').match(/^(?:AS)?(\d{1,10})\b/i); return match && Number(match[1]) > 0 ? `AS${match[1]}` : null; };
+
+const PROVIDERS = {
+  async proxycheck(ip, env) {
+    const url = new URL(`https://proxycheck.io/v3/${encodeURIComponent(ip)}`);
+    url.searchParams.set('key', secret(env.PROXYCHECK_API_KEY));
+    url.searchParams.set('tag', '0');
+    const result = await upstream(url, { headers: { Accept: 'application/json' } }, 'Proxycheck');
+    if (result.error) return result;
+    const data = result.data;
+    if (data?.status === 'warning' && /disabled|invalid.{0,12}key|revoked/i.test(String(data.message || ''))) return { error: { status: 502, code: 'upstream-key-unavailable', message: 'Proxycheck 授权当前不可用。' } };
+    if (!data || !['ok', 'warning'].includes(data.status)) return { error: { status: 502, code: 'upstream-service-error', message: 'Proxycheck 拒绝了本次查询。' } };
+    const entries = Object.entries(data).filter(([key]) => canonicalIP(key) !== null);
+    if (entries.length !== 1 || canonicalIP(entries[0][0]) !== ip) return { error: { status: 502, code: 'upstream-target', message: '上游目标不匹配，结果已弃用。' } };
+    const item = entries[0][1] || {};
+    const d = item.detections || {};
+    const rawType = text(item.network?.type)?.toLowerCase();
+    const types = { residential: 'residential', isp: 'isp', 'fixed line isp': 'isp', wireless: 'mobile', mobile: 'mobile', 'mobile isp': 'mobile', business: 'business', hosting: 'hosting', education: 'education' };
+    return { record: record('proxycheck', ip, {
+      country: country(item.location?.country_code), region: text(item.location?.region_name), city: text(item.location?.city_name),
+      lat: num(item.location?.latitude), lon: num(item.location?.longitude), timezone: text(item.location?.timezone),
+      asn: asn(item.network?.asn), org: text(item.network?.organisation) || text(item.network?.provider), hostname: text(item.network?.hostname),
+      networkType: d.hosting === true ? 'hosting' : types[rawType] || null, usageType: usage(types[rawType] || rawType), risk: num(d.risk),
+      flags: { vpn: bool(d.vpn), proxy: bool(d.proxy), tor: bool(d.tor), relay: null, hosting: bool(d.hosting), abuser: d.compromised === true ? true : null, crawler: d.scraper === true ? true : null, mobile: null, bogon: null },
+      devices: item.device_estimate ? { address: num(item.device_estimate.address), subnet: num(item.device_estimate.subnet) } : null,
+      lastSeen: text(d.last_seen),
+    }), ms: result.ms };
+  },
+  async dbip(ip) {
+    const result = await upstream(`https://api.db-ip.com/v2/free/${encodeURIComponent(ip)}`, { headers: { Accept: 'application/json' } }, 'DB-IP');
+    if (result.error) return result;
+    if (result.data?.errorCode === 'OVER_QUERY_LIMIT') return { error: { status: 429, code: 'upstream-daily-quota', message: 'DB-IP 免费日额度已用尽。', retryAfter: 86400 } };
+    if (result.data?.error || result.data?.errorCode || canonicalIP(result.data?.ipAddress) !== ip) return { error: { status: 502, code: 'upstream-target-or-schema', message: 'DB-IP 返回目标或格式不匹配。' } };
+    return { record: record('dbip', ip, { country: country(result.data.countryCode), region: text(result.data.stateProv), city: text(result.data.city) }), ms: result.ms };
+  },
+  async ip2location(ip, env) {
+    // Keyless quota is per calling IP and the hosting egress is shared, so a free account key is preferred.
+    const url = new URL('https://api.ip2location.io/');
+    if (secret(env.IP2LOCATION_API_KEY)) url.searchParams.set('key', secret(env.IP2LOCATION_API_KEY));
+    url.searchParams.set('ip', ip);
+    const result = await upstream(url, { headers: { Accept: 'application/json' } }, 'IP2Location.io');
+    if (result.error) return result;
+    const data = result.data;
+    if (Number(data?.error?.error_code) === 10000) return { error: { status: 429, code: 'upstream-quota', message: 'IP2Location.io 匿名额度已用尽。', retryAfter: 3600 } };
+    if (data?.error || canonicalIP(data?.ip) !== ip) return { error: { status: 502, code: 'upstream-target-or-schema', message: 'IP2Location.io 返回目标或格式不匹配。' } };
+    return { record: record('ip2location', ip, {
+      country: country(data.country_code), region: text(data.region_name), city: text(data.city_name), lat: num(data.latitude), lon: num(data.longitude),
+      asn: asn(data.asn), org: text(data.as), usageType: usage(data.usage_type), companyType: usage(data.as_usage_type),
+      networkType: usage(data.usage_type) === 'residential' ? 'isp' : usage(data.usage_type),
+      flags: { vpn: null, proxy: bool(data.is_proxy), tor: null, relay: null, hosting: null, abuser: null, crawler: null, mobile: null, bogon: null },
+    }), ms: result.ms };
+  },
+  async ipapi(ip) {
+    // ip-api.com's free endpoint is HTTP-only, so browsers on HTTPS pages cannot call it directly.
+    const fields = 'status,message,countryCode,regionName,city,lat,lon,timezone,isp,org,as,mobile,proxy,hosting,query';
+    const result = await upstream(`http://ip-api.com/json/${encodeURIComponent(ip)}?fields=${fields}`, { headers: { Accept: 'application/json' } }, 'ip-api.com');
+    if (result.error) return result;
+    const data = result.data;
+    if (data?.status !== 'success' || canonicalIP(data.query) !== ip) return { error: { status: 502, code: 'upstream-service-error', message: `ip-api.com：${text(data?.message) || '查询失败'}` } };
+    return { record: record('ipapi', ip, {
+      country: country(data.countryCode), region: text(data.regionName), city: text(data.city), lat: num(data.lat), lon: num(data.lon),
+      timezone: text(data.timezone), asn: asn(data.as), org: text(data.org) || text(data.isp),
+      networkType: data.hosting === true ? 'hosting' : data.mobile === true ? 'mobile' : null,
+      usageType: data.hosting === true ? 'hosting' : data.mobile === true ? 'mobile' : null,
+      flags: { vpn: null, proxy: bool(data.proxy), tor: null, relay: null, hosting: bool(data.hosting), abuser: null, crawler: null, mobile: bool(data.mobile), bogon: null },
+    }), ms: result.ms };
+  },
+  async abuseipdb(ip, env) {
+    const url = new URL('https://api.abuseipdb.com/api/v2/check');
+    url.searchParams.set('ipAddress', ip);
+    url.searchParams.set('maxAgeInDays', '90');
+    const result = await upstream(url, { headers: { Accept: 'application/json', Key: secret(env.ABUSEIPDB_API_KEY) } }, 'AbuseIPDB');
+    if (result.error) return result;
+    const data = result.data?.data;
+    if (!data || canonicalIP(data.ipAddress) !== ip) return { error: { status: 502, code: 'upstream-target-or-schema', message: 'AbuseIPDB 返回目标或格式不匹配。' } };
+    const usage = String(data.usageType || '');
+    const networkType = /Data Center|Hosting|Content Delivery/i.test(usage) ? 'hosting' : /Mobile/i.test(usage) ? 'mobile' : /Fixed Line ISP/i.test(usage) ? 'isp'
+      : /University|College|School/i.test(usage) ? 'education' : /Commercial|Organization|Government|Military/i.test(usage) ? 'business' : null;
+    const score = num(data.abuseConfidenceScore);
+    // Neighbours: reports for the rest of the /24 in the last 30 days (free plan allows /24 blocks).
+    let block = null;
+    if (!ip.includes(':')) {
+      const prefix = `${ip.split('.').slice(0, 3).join('.')}.0/24`;
+      const blockURL = new URL('https://api.abuseipdb.com/api/v2/check-block');
+      blockURL.searchParams.set('network', prefix);
+      blockURL.searchParams.set('maxAgeInDays', '30');
+      const neighbours = await upstream(blockURL, { headers: { Accept: 'application/json', Key: secret(env.ABUSEIPDB_API_KEY) } }, 'AbuseIPDB');
+      const reported = Array.isArray(neighbours.data?.data?.reportedAddress) ? neighbours.data.data.reportedAddress.filter(item => canonicalIP(item?.ipAddress) !== ip) : null;
+      if (reported) block = { prefix, reported: reported.length, maxScore: reported.reduce((max, item) => Math.max(max, num(item.abuseConfidenceScore) || 0), 0) };
+    }
+    return { record: record('abuseipdb', ip, {
+      country: country(data.countryCode), org: text(data.isp), hostname: text(data.hostnames?.[0]), networkType, usageType: networkType === 'isp' ? 'residential' : networkType, risk: score,
+      flags: { vpn: null, proxy: null, tor: bool(data.isTor), relay: null, hosting: null, abuser: score === null ? null : score >= 25 ? true : data.totalReports === 0 ? false : null, crawler: null, mobile: null, bogon: null },
+      reports: num(data.totalReports), lastReported: text(data.lastReportedAt), usageType: text(usage), block,
+    }), ms: result.ms };
+  },
+};
+
+PROVIDERS.ipinfo = async function ipinfo(ip, env) {
+  const token = secret(env.IPINFO_TOKEN);
+  // Current API (api.ipinfo.io/lookup): geo / as / anonymous / is_* fields, present on plans that include them.
+  const lookup = new URL(`https://api.ipinfo.io/lookup/${encodeURIComponent(ip)}`);
+  lookup.searchParams.set('token', token);
+  const current = await upstream(lookup, { headers: { Accept: 'application/json' } }, 'IPinfo');
+  if (!current.error && canonicalIP(current.data?.ip) === ip) return { record: ipinfoCurrent(ip, current.data), ms: current.ms };
+  if (current.error && current.error.code !== 'upstream-access-denied' && current.error.code !== 'upstream-http-error') return current;
+  // Legacy token endpoint (ipinfo.io/{ip}): privacy / company / asn objects on plans that include them.
+  const legacy = new URL(`https://ipinfo.io/${encodeURIComponent(ip)}`);
+  legacy.searchParams.set('token', token);
+  const result = await upstream(legacy, { headers: { Accept: 'application/json' } }, 'IPinfo');
+  if (result.error) return result;
+  const data = result.data;
+  if (!data || canonicalIP(data.ip) !== ip) return { error: { status: 502, code: 'upstream-target-or-schema', message: 'IPinfo 返回目标或格式不匹配。' } };
+  const [lat, lon] = String(data.loc || '').split(',').map(Number);
+  const companyType = text(data.company?.type);
+  const privacy = data.privacy || {};
+  return { record: record('ipinfo', ip, {
+    country: country(data.country), region: text(data.region), city: text(data.city), lat: Number.isFinite(lat) ? lat : null, lon: Number.isFinite(lon) ? lon : null,
+    timezone: text(data.timezone), asn: asn(data.asn?.asn || data.org), org: text(data.company?.name) || text(data.org)?.replace(/^AS\d+\s+/i, '') || null, hostname: text(data.hostname),
+    networkType: { isp: 'isp', hosting: 'hosting', business: 'business', education: 'education' }[companyType] || null,
+    usageType: privacy.hosting === true ? 'hosting' : null, companyType: usage(companyType || data.asn?.type),
+    flags: { vpn: bool(privacy.vpn), proxy: bool(privacy.proxy), tor: bool(privacy.tor), relay: bool(privacy.relay), hosting: bool(privacy.hosting), abuser: null, crawler: null, mobile: null, bogon: bool(data.bogon) },
+    asnType: text(data.asn?.type), privacyService: text(privacy.service), anycast: data.anycast === true,
+  }), ms: result.ms };
+};
+
+function ipinfoCurrent(ip, data) {
+  const geo = data.geo || {}; const as = data.as || {}; const anon = data.anonymous || {};
+  const hosting = bool(data.is_hosting); const mobile = bool(data.is_mobile);
+  // A residential-proxy hit is still a proxy; keep it separately so the page can name it.
+  const resProxy = bool(anon.is_res_proxy);
+  return record('ipinfo', ip, {
+    country: country(geo.country_code), region: text(geo.region), city: text(geo.city), lat: num(geo.latitude), lon: num(geo.longitude),
+    timezone: text(geo.timezone), asn: asn(as.asn), org: text(as.name), hostname: text(data.hostname),
+    networkType: hosting === true ? 'hosting' : mobile === true ? 'mobile' : null,
+    usageType: hosting === true ? 'hosting' : mobile === true ? 'mobile' : null, companyType: usage(data.company?.type || as.type),
+    flags: {
+      vpn: bool(anon.is_vpn), proxy: anon.is_proxy === true || resProxy === true ? true : bool(anon.is_proxy), tor: bool(anon.is_tor), relay: bool(anon.is_relay),
+      hosting, abuser: null, crawler: null, mobile, bogon: null,
+    },
+    asnType: text(as.type), resProxy, anycast: data.is_anycast === true, satellite: data.is_satellite === true, geoChanged: text(geo.last_changed),
+  });
+}
+
+PROVIDERS.ipqs = async function ipqs(ip, env) {
+  const url = new URL(`https://ipqualityscore.com/api/json/ip/${encodeURIComponent(secret(env.IPQS_API_KEY))}/${encodeURIComponent(ip)}`);
+  url.searchParams.set('strictness', '1');
+  url.searchParams.set('allow_public_access_points', 'true');
+  url.searchParams.set('fast', 'true');
+  const result = await upstream(url, { headers: { Accept: 'application/json' } }, 'IPQualityScore');
+  if (result.error) return result;
+  const data = result.data;
+  if (data?.success !== true) {
+    const quota = /quota|credits|exceeded|limit/i.test(String(data?.message || ''));
+    return { error: quota ? { status: 429, code: 'upstream-quota', message: 'IPQualityScore 本月额度已用尽。', retryAfter: 86400 } : { status: 502, code: 'upstream-service-error', message: 'IPQualityScore 拒绝了本次查询。' } };
+  }
+  const connection = String(data.connection_type || '');
+  const networkType = /Data Center/i.test(connection) ? 'hosting' : /Mobile/i.test(connection) ? 'mobile' : /Residential/i.test(connection) ? 'residential'
+    : /Corporate/i.test(connection) ? 'business' : /Education/i.test(connection) ? 'education' : null;
+  return { record: record('ipqs', ip, {
+    country: country(data.country_code), region: text(data.region), city: text(data.city), lat: num(data.latitude), lon: num(data.longitude),
+    timezone: text(data.timezone), asn: asn(data.ASN), org: text(data.organization) || text(data.ISP), hostname: text(data.host) !== ip ? text(data.host) : null,
+    networkType, usageType: networkType === 'isp' ? 'residential' : networkType, risk: num(data.fraud_score),
+    flags: {
+      vpn: data.vpn === true || data.active_vpn === true ? true : bool(data.vpn), proxy: bool(data.proxy), tor: data.tor === true || data.active_tor === true ? true : bool(data.tor),
+      relay: null, hosting: networkType === 'hosting' ? true : null, abuser: bool(data.recent_abuse), crawler: data.is_crawler === true || data.bot_status === true ? true : bool(data.is_crawler), mobile: bool(data.mobile), bogon: null,
+    },
+    activeVpn: data.active_vpn === true, activeTor: data.active_tor === true, abuseVelocity: text(data.abuse_velocity), connectionType: text(connection),
+  }), ms: result.ms };
+};
+
+PROVIDERS.ipregistry = async function ipregistry(ip, env) {
+  const url = new URL(`https://api.ipregistry.co/${encodeURIComponent(ip)}`);
+  url.searchParams.set('key', secret(env.IPREGISTRY_API_KEY));
+  url.searchParams.set('fields', 'ip,connection,company,location.country.code,location.region.name,location.city,location.latitude,location.longitude,time_zone.id,security');
+  const result = await upstream(url, { headers: { Accept: 'application/json' } }, 'IPRegistry');
+  if (result.error) return result;
+  const data = result.data;
+  if (!data || canonicalIP(data.ip) !== ip) return { error: { status: 502, code: 'upstream-target-or-schema', message: 'IPRegistry 返回目标或格式不匹配。' } };
+  const sec = data.security || {};
+  const usageType = usage(data.connection?.type);
+  return { record: record('ipregistry', ip, {
+    country: country(data.location?.country?.code), region: text(data.location?.region?.name), city: text(data.location?.city),
+    lat: num(data.location?.latitude), lon: num(data.location?.longitude), timezone: text(data.time_zone?.id),
+    asn: asn(data.connection?.asn), org: text(data.connection?.organization) || text(data.company?.name),
+    networkType: usageType === 'residential' ? 'isp' : usageType, usageType, companyType: usage(data.company?.type),
+    flags: {
+      vpn: bool(sec.is_vpn), proxy: bool(sec.is_proxy), tor: sec.is_tor === true || sec.is_tor_exit === true ? true : bool(sec.is_tor), relay: bool(sec.is_relay),
+      hosting: sec.is_cloud_provider === true || usageType === 'hosting' ? true : null, abuser: sec.is_abuser === true || sec.is_attacker === true || sec.is_threat === true ? true : bool(sec.is_abuser),
+      crawler: null, mobile: usageType === 'mobile' ? true : null, bogon: bool(sec.is_bogon),
+    },
+  }), ms: result.ms };
+};
+
+PROVIDERS.ipdata = async function ipdata(ip, env) {
+  const url = new URL(`https://api.ipdata.co/${encodeURIComponent(ip)}`);
+  url.searchParams.set('api-key', secret(env.IPDATA_API_KEY));
+  const result = await upstream(url, { headers: { Accept: 'application/json' } }, 'IPData');
+  if (result.error) return result;
+  const data = result.data;
+  if (!data || canonicalIP(data.ip) !== ip) return { error: { status: 502, code: 'upstream-target-or-schema', message: 'IPData 返回目标或格式不匹配。' } };
+  const threat = data.threat || {};
+  const scores = threat.scores || {};
+  return { record: record('ipdata', ip, {
+    country: country(data.country_code), region: text(data.region), city: text(data.city), lat: num(data.latitude), lon: num(data.longitude),
+    timezone: text(data.time_zone?.name), asn: asn(data.asn?.asn), org: text(data.asn?.name) || text(data.company?.name),
+    networkType: threat.is_datacenter === true ? 'hosting' : null, usageType: threat.is_datacenter === true ? 'hosting' : null,
+    companyType: usage(data.company?.type || data.asn?.type), risk: num(scores.threat_score),
+    flags: {
+      vpn: typeof scores.vpn_score === 'number' ? scores.vpn_score >= 70 : null, proxy: bool(threat.is_proxy), tor: bool(threat.is_tor), relay: bool(threat.is_icloud_relay),
+      hosting: bool(threat.is_datacenter), abuser: threat.is_known_attacker === true || threat.is_known_abuser === true ? true : (threat.is_known_attacker === false && threat.is_known_abuser === false ? false : null),
+      crawler: null, mobile: null, bogon: bool(threat.is_bogon),
+    },
+  }), ms: result.ms };
+};
+
+const NO_FLAGS = () => ({ vpn: null, proxy: null, tor: null, relay: null, hosting: null, abuser: null, crawler: null, mobile: null, bogon: null });
+
+PROVIDERS.greynoise = async function greynoise(ip, env) {
+  const result = await upstream(`https://api.greynoise.io/v3/community/${encodeURIComponent(ip)}`, { headers: { Accept: 'application/json', key: secret(env.GREYNOISE_API_KEY) } }, 'GreyNoise');
+  // 404 means "not seen scanning and not a known benign service" — a clean answer, not an error.
+  if (result.error?.httpStatus === 404) return { record: record('greynoise', ip, { noise: false, riot: false, classification: 'unseen', flags: { ...NO_FLAGS(), crawler: false } }), ms: 0 };
+  if (result.error) return result;
+  const data = result.data || {};
+  const classification = text(data.classification);
+  return { record: record('greynoise', ip, {
+    noise: data.noise === true, riot: data.riot === true, classification, name: text(data.name), lastSeen: text(data.last_seen),
+    flags: { ...NO_FLAGS(), crawler: data.noise === true ? true : data.noise === false ? false : null, abuser: classification === 'malicious' ? true : classification === 'benign' ? false : null },
+  }), ms: result.ms };
+};
+
+PROVIDERS.crowdsec = async function crowdsec(ip, env) {
+  const result = await upstream(`https://cti.api.crowdsec.net/v2/smoke/${encodeURIComponent(ip)}`, { headers: { Accept: 'application/json', 'x-api-key': secret(env.CROWDSEC_CTI_KEY) } }, 'CrowdSec');
+  if (result.error?.httpStatus === 404) return { record: record('crowdsec', ip, { reputation: 'unknown', flags: { ...NO_FLAGS(), abuser: false } }), ms: 0 };
+  if (result.error) return result;
+  const data = result.data || {};
+  const names = [...(data.classifications?.classifications || []), ...(data.classifications?.false_positives || [])].map(item => String(item?.name || ''));
+  const reputation = text(data.reputation);
+  const total = num(data.scores?.overall?.total);
+  return { record: record('crowdsec', ip, {
+    country: country(data.location?.country), asn: asn(data.as_num), org: text(data.as_name), reputation,
+    behaviors: (data.behaviors || []).map(item => text(item?.label || item?.name)).filter(Boolean).slice(0, 6), risk: total === null ? null : Math.round(total * 20),
+    flags: {
+      ...NO_FLAGS(), vpn: names.some(name => /vpn/i.test(name)) || null, tor: names.some(name => /tor/i.test(name)) || null,
+      proxy: names.some(name => /proxy:(?!vpn|tor)/i.test(name)) || null,
+      abuser: reputation === 'malicious' || reputation === 'suspicious' ? true : reputation === 'safe' || reputation === 'known' ? false : null,
+    },
+  }), ms: result.ms };
+};
+
+PROVIDERS.vpnapi = async function vpnapi(ip, env) {
+  const result = await upstream(`https://vpnapi.io/api/${encodeURIComponent(ip)}?key=${encodeURIComponent(secret(env.VPNAPI_KEY))}`, { headers: { Accept: 'application/json' } }, 'vpnapi.io');
+  if (result.error) return result;
+  const data = result.data || {};
+  if (canonicalIP(data.ip) !== ip) return { error: { status: 502, code: 'upstream-target-or-schema', message: 'vpnapi.io 返回目标或格式不匹配。' } };
+  const sec = data.security || {};
+  return { record: record('vpnapi', ip, {
+    country: country(data.location?.country_code), city: text(data.location?.city), asn: asn(data.network?.autonomous_system_number), org: text(data.network?.autonomous_system_organization),
+    flags: { ...NO_FLAGS(), vpn: bool(sec.vpn), proxy: bool(sec.proxy), tor: bool(sec.tor), relay: bool(sec.relay) },
+  }), ms: result.ms };
+};
+
+PROVIDERS.iphub = async function iphub(ip, env) {
+  const result = await upstream(`https://v2.api.iphub.info/ip/${encodeURIComponent(ip)}`, { headers: { Accept: 'application/json', 'X-Key': secret(env.IPHUB_KEY) } }, 'IPHub');
+  if (result.error) return result;
+  const data = result.data || {};
+  if (canonicalIP(data.ip) !== ip) return { error: { status: 502, code: 'upstream-target-or-schema', message: 'IPHub 返回目标或格式不匹配。' } };
+  // block 0 = residential / unclassified, 1 = non-residential (hosting, proxy), 2 = mixed.
+  const block = num(data.block);
+  return { record: record('iphub', ip, {
+    country: country(data.countryCode), asn: asn(data.asn), org: text(data.isp), block,
+    usageType: block === 1 ? 'hosting' : null, networkType: block === 1 ? 'hosting' : null,
+    flags: { ...NO_FLAGS(), hosting: block === 1 ? true : block === 0 ? false : null },
+  }), ms: result.ms };
+};
+
+PROVIDERS.getipintel = async function getipintel(ip, env) {
+  const url = new URL('https://check.getipintel.net/check.php');
+  url.searchParams.set('ip', ip); url.searchParams.set('contact', secret(env.GETIPINTEL_CONTACT)); url.searchParams.set('format', 'json'); url.searchParams.set('flags', 'm');
+  const result = await upstream(url, { headers: { Accept: 'application/json' } }, 'GetIPIntel');
+  if (result.error) return result;
+  const p = num(result.data?.result);
+  if (result.data?.status !== 'success' || p === null || p < 0) return { error: { status: 502, code: 'upstream-service-error', message: 'GetIPIntel 未返回概率。' } };
+  return { record: record('getipintel', ip, { risk: Math.round(p * 100), probability: p, flags: { ...NO_FLAGS(), proxy: p >= 0.95 ? true : p <= 0.3 ? false : null } }), ms: result.ms };
+};
+
+PROVIDERS.scamalytics = async function scamalytics(ip, env) {
+  const host = /^api\d*\.scamalytics\.com$/.test(secret(env.SCAMALYTICS_HOST)) ? secret(env.SCAMALYTICS_HOST) : 'api11.scamalytics.com';
+  const url = new URL(`https://${host}/v3/${encodeURIComponent(secret(env.SCAMALYTICS_USER))}/`);
+  url.searchParams.set('key', secret(env.SCAMALYTICS_KEY)); url.searchParams.set('ip', ip);
+  const result = await upstream(url, { headers: { Accept: 'application/json' } }, 'Scamalytics');
+  if (result.error) return result;
+  const data = result.data?.scamalytics || {};
+  if (data.status !== 'ok') return { error: { status: 502, code: 'upstream-service-error', message: 'Scamalytics 拒绝了本次查询。' } };
+  const proxy = data.scamalytics_proxy || {};
+  return { record: record('scamalytics', ip, {
+    risk: num(data.scamalytics_score), riskLabel: text(data.scamalytics_risk), org: text(data.scamalytics_isp),
+    flags: { ...NO_FLAGS(), vpn: bool(proxy.is_vpn), hosting: proxy.is_datacenter === true || proxy.is_amazon_aws === true || proxy.is_google === true ? true : bool(proxy.is_datacenter), relay: bool(proxy.is_apple_icloud_private_relay) },
+  }), ms: result.ms };
+};
+
+PROVIDERS.virustotal = async function virustotal(ip, env) {
+  const result = await upstream(`https://www.virustotal.com/api/v3/ip_addresses/${encodeURIComponent(ip)}`, { headers: { Accept: 'application/json', 'x-apikey': secret(env.VT_API_KEY) } }, 'VirusTotal');
+  if (result.error) return result;
+  const attributes = result.data?.data?.attributes || {};
+  const stats = attributes.last_analysis_stats || {};
+  const malicious = num(stats.malicious) || 0; const suspicious = num(stats.suspicious) || 0;
+  return { record: record('virustotal', ip, {
+    country: country(attributes.country), asn: asn(attributes.asn), org: text(attributes.as_owner),
+    vtMalicious: malicious, vtSuspicious: suspicious, vtReputation: num(attributes.reputation),
+    risk: Math.min(100, malicious * 12 + suspicious * 4),
+    flags: { ...NO_FLAGS(), abuser: malicious >= 3 ? true : malicious === 0 && suspicious === 0 ? false : null },
+  }), ms: result.ms };
+};
+
+PROVIDERS.ipapiis = async function ipapiis(ip, env) {
+  const result = await upstream(`https://api.ipapi.is/?q=${encodeURIComponent(ip)}&key=${encodeURIComponent(secret(env.IPAPI_IS_KEY))}`, { headers: { Accept: 'application/json' } }, 'ipapi.is');
+  if (result.error) return result;
+  const data = result.data || {};
+  if (canonicalIP(data.ip) !== ip) return { error: { status: 502, code: 'upstream-target-or-schema', message: 'ipapi.is 返回目标或格式不匹配。' } };
+  const company = data.company || {}; const as = data.asn || {}; const loc = data.location || {};
+  const companyType = usage(company.type);
+  const scoreOf = value => ({ 'very low': 3, low: 10, elevated: 40, high: 70, 'very high': 90 })[String(/\(([^)]+)\)/.exec(String(value || ''))?.[1] || '').toLowerCase()] ?? null;
+  return { record: record('ipapiis', ip, {
+    country: country(loc.country_code), region: text(loc.state), city: text(loc.city), lat: num(loc.latitude), lon: num(loc.longitude), timezone: text(loc.timezone),
+    asn: asn(as.asn), org: text(company.name) || text(as.org), networkType: companyType === 'residential' ? 'isp' : companyType, companyType,
+    usageType: data.is_datacenter === true ? 'hosting' : data.is_mobile === true ? 'mobile' : null, asnType: text(as.type), risk: scoreOf(company.abuser_score),
+    flags: { vpn: bool(data.is_vpn), proxy: bool(data.is_proxy), tor: bool(data.is_tor), relay: null, hosting: bool(data.is_datacenter), abuser: bool(data.is_abuser), crawler: bool(data.is_crawler), mobile: bool(data.is_mobile), bogon: bool(data.is_bogon) },
+  }), ms: result.ms };
+};
+
+// ---------- verification & ASN routes ----------
+
+async function readToken(request, kind) {
+  const type = request.headers.get('Content-Type') || '';
+  if (!type.includes('application/json')) return null;
+  const maxTokenLength = kind === 'recaptcha' ? 8192 : 2048;
+  const maxBodyBytes = kind === 'recaptcha' ? 16384 : 4096;
+  const reader = request.body?.getReader();
+  if (!reader) return null;
+  const decoder = new TextDecoder();
+  let body = ''; let bytes = 0;
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      bytes += chunk.value.byteLength;
+      if (bytes > maxBodyBytes) { await reader.cancel(); return null; }
+      body += decoder.decode(chunk.value, { stream: true });
+    }
+    body += decoder.decode();
+  } catch { return null; }
+  finally { reader.releaseLock(); }
+  try { const token = JSON.parse(body)?.token; return typeof token === 'string' && token.length >= 10 && token.length <= maxTokenLength ? token : null; }
+  catch { return null; }
+}
+
+async function siteverify(kind, request, env, origin) {
+  const token = await readToken(request, kind);
+  if (!token) return failure(400, 'invalid-token', '缺少有效的 token。', origin);
+  const form = new URLSearchParams({ secret: secret(kind === 'turnstile' ? env.TURNSTILE_SECRET_KEY : env.RECAPTCHA_SECRET_KEY), response: token });
+  const caller = trustedCaller(request);
+  if (caller) form.set('remoteip', caller);
+  const endpoint = kind === 'turnstile' ? 'https://challenges.cloudflare.com/turnstile/v0/siteverify' : 'https://www.google.com/recaptcha/api/siteverify';
+  const result = await upstream(endpoint, { method: 'POST', body: form, headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }, kind === 'turnstile' ? 'Turnstile' : 'reCAPTCHA');
+  if (result.error) return failure(result.error.status, result.error.code, result.error.message, origin);
+  const data = result.data || {};
+  const body = { success: data.success === true, hostname: text(data.hostname), challengeTs: text(data.challenge_ts), errorCodes: Array.isArray(data['error-codes']) ? data['error-codes'].map(String).slice(0, 5) : [] };
+  if (kind === 'recaptcha') { body.score = num(data.score); body.action = text(data.action); }
+  return json(body, 200, origin);
+}
+
+async function radar(url, env, origin, ctx) {
+  const value = url.searchParams.get('asn') || '';
+  if (!/^\d{1,10}$/.test(value) || Number(value) <= 0) return failure(400, 'invalid-asn', '需要一个 ASN 数字。', origin);
+  const cacheKey = new Request(new URL(`/__egress_cache/radar-v1/${value}`, url.origin));
+  const cached = await readCache(cacheKey);
+  if (cached) return json({ ...cached, cacheHit: true }, 200, origin);
+  const api = `https://api.cloudflare.com/client/v4/radar/http/summary/bot_class?asn=${value}&dateRange=28d&format=json`;
+  const result = await upstream(api, { headers: { Authorization: `Bearer ${secret(env.CF_RADAR_TOKEN)}`, Accept: 'application/json' } }, 'Cloudflare Radar');
+  if (result.error) return failure(result.error.status, result.error.code, result.error.message, origin);
+  const summary = result.data?.result?.summary_0;
+  const bot = num(summary?.bot); const human = num(summary?.human);
+  if (bot === null || human === null) return failure(404, 'no-data', 'Radar 没有该 ASN 的流量数据。', origin);
+  const body = { status: 'success', asn: Number(value), bot: Math.round(bot * 10) / 1000, human: Math.round(human * 10) / 1000, window: '28d', observedAt: new Date().toISOString() };
+  await writeCache(cacheKey, body, ctx, 6 * 3600);
+  return json({ ...body, cacheHit: false }, 200, origin);
+}
+
+// ---------- cache ----------
+
+async function readCache(key) {
+  const store = typeof caches !== 'undefined' ? caches.default : null;
+  if (!store) return null;
+  try { const hit = await store.match(key); return hit ? await hit.json() : null; } catch { return null; }
+}
+
+async function writeCache(key, body, ctx, seconds = CACHE_SECONDS) {
+  const store = typeof caches !== 'undefined' ? caches.default : null;
+  if (!store) return;
+  const write = store.put(key, new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json', 'Cache-Control': `public, max-age=${seconds}` } })).catch(() => {});
+  if (ctx?.waitUntil) ctx.waitUntil(write); else await write;
+}
+
+// ---------- router ----------
 
 async function handle(request, env, ctx) {
-  const permitted = allowedOrigin(env, request.headers.get('Origin'));
-  if (!permitted) return failure(503, 'origin-configuration', '服务端来源配置无效。', null);
   const sentOrigin = request.headers.get('Origin');
+  const permitted = allowedOrigin(env, sentOrigin);
+  if (!permitted) return failure(503, 'origin-configuration', '服务端来源配置无效。', null);
   if (sentOrigin !== null && sentOrigin !== permitted) return failure(403, 'origin-denied', '此来源未获允许。', null);
   const origin = sentOrigin === permitted ? permitted : null;
   const url = new URL(request.url);
-  const providerId = ROUTES[url.pathname];
-  const knownPath = url.pathname === '/health' || Boolean(providerId);
-  if (!knownPath) return failure(404, 'not-found', '接口不存在。', origin);
-  if (request.method === 'OPTIONS') {
-    if (!origin || request.headers.get('Access-Control-Request-Method') !== 'GET') return failure(403, 'preflight-denied', '预检请求未获允许。', origin);
-    const requestedHeaders = (request.headers.get('Access-Control-Request-Headers') || '').split(',').map((header) => header.trim().toLowerCase()).filter(Boolean);
-    if (requestedHeaders.some((header) => !['accept', 'content-type'].includes(header))) return failure(403, 'preflight-headers-denied', '预检请求头未获允许。', origin);
-    return new Response(null, { status: 204, headers: responseHeaders(origin, {
-      'Access-Control-Allow-Methods': 'GET, OPTIONS', 'Access-Control-Allow-Headers': 'Accept, Content-Type', 'Access-Control-Max-Age': '600',
-    }) });
-  }
-  if (request.method !== 'GET') return failure(405, 'method-not-allowed', '仅支持 GET。', origin);
-  if (url.pathname === '/health') return json({ status: 'ok', service: 'egress-observatory-api', apiVersion: 2, providers: ['proxycheck', 'dbip', 'ip2location'], cacheTTLSeconds: CACHE_SECONDS, rateLimitPerMinute: RATE_LIMIT, rateLimitScope: 'per-caller-per-isolate-memory-shared-across-routes', configured: typeof env.PROXYCHECK_API_KEY === 'string' && env.PROXYCHECK_API_KEY.trim().length > 0 }, 200, origin);
-  const parameterNames = [...url.searchParams.keys()];
-  if (parameterNames.length !== 1 || parameterNames[0] !== 'ip') return failure(400, 'invalid-parameters', '只接受一个 ip 参数。', origin, null, null, providerId);
-  const ip = publicIP(url.searchParams.get('ip'));
-  if (!ip) return failure(400, 'invalid-public-ip', '请输入公网 IPv4 或 IPv6；域名、URL、私网及保留地址不接受。', origin, null, null, providerId);
-  const key = providerId === 'proxycheck' && typeof env.PROXYCHECK_API_KEY === 'string' ? env.PROXYCHECK_API_KEY.trim() : '';
-  if (providerId === 'proxycheck' && !key) return failure(503, 'provider-not-configured', 'Proxycheck 服务端授权尚未配置。', origin, ip);
-  const slot = takeRateSlot(request);
-  if (!slot.allowed) return failure(429, 'local-rate-limit', '请求频率超过每分钟 10 次，请稍后重试。', origin, ip, slot.retryAfter, providerId);
+  const routes = enabledRoutes(env);
+  const verifyKind = { '/v1/turnstile/verify': 'turnstile', '/v1/recaptcha/verify': 'recaptcha' }[url.pathname];
+  const lookup = LOOKUPS[url.pathname];
+  const known = url.pathname === '/health' || url.pathname === '/v1/radar' || Boolean(lookup) || Boolean(verifyKind);
+  if (!known) return failure(404, 'not-found', '接口不存在。', origin);
+  const method = verifyKind ? 'POST' : 'GET';
 
-  // An origin-independent, versioned, IP-only cache key. No secret or inbound headers.
-  const cacheURL = new URL(`/__egress_cache/${providerId}-v1/${encodeURIComponent(ip)}`, url.origin);
-  const cacheKey = new Request(cacheURL, { method: 'GET' });
-  const edgeCache = typeof caches !== 'undefined' ? caches.default : null;
-  if (edgeCache) {
-    try {
-      const cached = await edgeCache.match(cacheKey);
-      if (cached) {
-        const record = await cached.json();
-        const age = Date.now() - new Date(record.observedAt).getTime();
-        if (record.status === 'success' && record.providerId === providerId && canonicalIP(record.ip) === ip && age >= 0 && age < CACHE_SECONDS * 1000) {
-          return json({ ...record, cacheHit: true }, 200, origin, { 'X-Data-Cache': 'HIT' });
-        }
-      }
-    } catch { /* Cache availability does not change upstream data semantics. */ }
+  if (request.method === 'OPTIONS') {
+    if (!origin || request.headers.get('Access-Control-Request-Method') !== method) return failure(403, 'preflight-denied', '预检请求未获允许。', origin);
+    const requested = (request.headers.get('Access-Control-Request-Headers') || '').split(',').map(item => item.trim().toLowerCase()).filter(Boolean);
+    if (requested.some(item => !['accept', 'content-type'].includes(item))) return failure(403, 'preflight-headers-denied', '预检请求头未获允许。', origin);
+    return new Response(null, { status: 204, headers: headers(origin, { 'Access-Control-Allow-Methods': `${method}, OPTIONS`, 'Access-Control-Allow-Headers': 'Accept, Content-Type', 'Access-Control-Max-Age': '600' }) });
   }
-  const result = providerId === 'proxycheck' ? await getUpstream(ip, key) : await getPublicUpstream(providerId, ip);
-  if (!result.record) return failure(result.status, result.code, result.message, origin, ip, result.retryAfter ?? null, providerId);
-  if (edgeCache) {
-    const response = new Response(JSON.stringify(result.record), { headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': `public, max-age=${CACHE_SECONDS}` } });
-    const write = edgeCache.put(cacheKey, response).catch(() => {});
-    if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(write);
-    else await write;
+  if (request.method !== method) return failure(405, 'method-not-allowed', `仅支持 ${method}。`, origin);
+
+  if (url.pathname === '/health') {
+    return json({ status: 'ok', service: 'egress-observatory-api', apiVersion: API_VERSION, routes, providers: routes.filter(route => LOOKUPS[`/v1/${route}`]), cacheTTLSeconds: CACHE_SECONDS, rateLimitPerMinute: RATE_LIMIT }, 200, origin);
   }
-  return json({ ...result.record, cacheHit: false }, 200, origin, { 'X-Data-Cache': 'MISS' });
+
+  const slot = takeRateSlot(request);
+  if (!slot.allowed) return failure(429, 'local-rate-limit', `请求频率超过每分钟 ${RATE_LIMIT} 次。`, origin, { retryAfterSeconds: slot.retryAfter });
+
+  if (verifyKind) {
+    if (!routes.includes(`${verifyKind}-verify`)) return failure(503, 'not-configured', '服务端未配置该验证密钥。', origin);
+    return siteverify(verifyKind, request, env, origin);
+  }
+  if (url.pathname === '/v1/radar') {
+    if (!routes.includes('radar')) return failure(503, 'not-configured', '服务端未配置 Radar token。', origin);
+    return radar(url, env, origin, ctx);
+  }
+
+  if (!routes.includes(lookup)) return failure(503, 'provider-not-configured', '该来源未配置服务端密钥。', origin);
+  const names = [...url.searchParams.keys()];
+  if (names.length !== 1 || names[0] !== 'ip') return failure(400, 'invalid-parameters', '只接受一个 ip 参数。', origin);
+  const ip = publicIP(url.searchParams.get('ip'));
+  if (!ip) return failure(400, 'invalid-public-ip', '请输入公网 IPv4 或 IPv6；域名、URL、私网及保留地址不接受。', origin);
+
+  // Versioned, IP-only cache key: no secrets, no inbound headers.
+  const cacheKey = new Request(new URL(`/__egress_cache/${lookup}-v3/${encodeURIComponent(ip)}`, url.origin));
+  const cached = await readCache(cacheKey);
+  if (cached?.status === 'success' && cached.ip === ip) return json({ ...cached, cacheHit: true }, 200, origin, { 'X-Data-Cache': 'HIT' });
+  const result = await PROVIDERS[lookup](ip, env);
+  if (result.error) {
+    const { status, code, message, retryAfter: after } = result.error;
+    return failure(status, code, message, origin, after ? { retryAfterSeconds: after } : {});
+  }
+  await writeCache(cacheKey, result.record, ctx, CACHE_FOR[lookup] || CACHE_SECONDS);
+  return json({ ...result.record, duration: result.ms, cacheHit: false }, 200, origin, { 'X-Data-Cache': 'MISS' });
 }
 
 export default {
@@ -323,8 +678,7 @@ export default {
     try { return await handle(request, env, ctx); }
     catch {
       const permitted = allowedOrigin(env, request.headers.get('Origin'));
-      const origin = permitted && request.headers.get('Origin') === permitted ? permitted : null;
-      return failure(500, 'internal-error', '接口暂时无法处理请求。', origin);
+      return failure(500, 'internal-error', '接口暂时无法处理请求。', permitted && request.headers.get('Origin') === permitted ? permitted : null);
     }
   },
 };

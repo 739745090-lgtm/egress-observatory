@@ -1,56 +1,63 @@
-# 三源服务端适配器
+# Egress API
 
-`worker.js` 是无依赖 Cloudflare Worker ESM，默认导出 `fetch(request, env, ctx)`。GitHub Pages 托管静态前端，Sites 托管三个公开只读查询入口；前端只保存服务地址。Proxycheck 的本方授权密钥由运行时 secret 提供，DB-IP 与 IP2Location 使用官方免费服务端 API。
+`worker.js` 是无依赖的 Cloudflare Worker ESM，部署在 Sites（`egress-observatory-api`）。前端只调用它的公开地址；所有密钥都是运行时 secret，仓库与前端都不包含其值。
 
-[健康信息](https://egress-observatory-api.reaper-f.chatgpt.site/health) · [Proxycheck](https://egress-observatory-api.reaper-f.chatgpt.site/v1/proxycheck) · [DB-IP](https://egress-observatory-api.reaper-f.chatgpt.site/v1/dbip) · [IP2Location](https://egress-observatory-api.reaper-f.chatgpt.site/v1/ip2location)
+## 路由
 
-## 部署与实际状态
+| 路由 | 方法 | 需要 | 说明 |
+| --- | --- | --- | --- |
+| `/health` | GET | — | 返回 `apiVersion` 与已启用的 `routes`，前端据此决定调用哪些来源 |
+| `/v1/proxycheck?ip=` | GET | `PROXYCHECK_API_KEY` | VPN、代理、Tor、机房、风险分、入侵 / 爬虫标记、设备估计 |
+| `/v1/ipapi?ip=` | GET | — | ip-api.com（免费接口只有 HTTP，浏览器无法直连）：代理、机房、移动 |
+| `/v1/ip2location?ip=` | GET | `IP2LOCATION_API_KEY`（建议） | IP2Location.io；免密钥额度按调用 IP 计算，托管出口共享会被用光，配置免费账号 key（每月 5 万次）后按账号计；套餐含 `usage_type` 时提供使用 / 公司类型 |
+| `/v1/dbip?ip=` | GET | — | DB-IP 免费接口，每日 500 次 |
+| `/v1/abuseipdb?ip=` | GET | `ABUSEIPDB_API_KEY`（可选） | 滥用置信度、举报数、用途类型；IPv4 另查同 /24 近 30 天被举报的邻居（check-block） |
+| `/v1/ipqs?ip=` | GET | `IPQS_API_KEY`（可选） | IPQualityScore 欺诈分、VPN / 代理 / Tor（含活跃）、近期滥用、爬虫、连接类型；缓存 6 小时 |
+| `/v1/ipinfo?ip=` | GET | `IPINFO_TOKEN`（可选） | 优先用 `api.ipinfo.io/lookup`（anonymous.is_vpn / is_proxy / is_tor / is_relay / is_res_proxy、is_hosting、is_mobile、as.type），套餐不含时退回旧接口 |
+| `/v1/ipregistry?ip=` | GET | `IPREGISTRY_API_KEY`（可选） | 连接类型、公司类型、安全标记；缓存 6 小时 |
+| `/v1/ipdata?ip=` | GET | `IPDATA_API_KEY`（可选） | 威胁标记与分数、机房、ASN 类型 |
+| `/v1/ipapiis?ip=` | GET | `IPAPI_IS_KEY`（可选） | ipapi.is 完整版：VPN / 代理 / Tor / 机房 / 滥用 / 爬虫、公司与 ASN 类型、滥用分 |
+| `/v1/scamalytics?ip=` | GET | `SCAMALYTICS_USER` + `SCAMALYTICS_KEY`（可选，可选 `SCAMALYTICS_HOST`） | Scamalytics 欺诈分、机房、VPN、iCloud 中继 |
+| `/v1/vpnapi?ip=` | GET | `VPNAPI_KEY`（可选） | VPN / 代理 / Tor / 中继 |
+| `/v1/iphub?ip=` | GET | `IPHUB_KEY`（可选） | block 0 家宽 / 1 非家宽（机房、代理）/ 2 混合 |
+| `/v1/getipintel?ip=` | GET | `GETIPINTEL_CONTACT`（可选，填你的邮箱） | 代理 / VPN 概率 |
+| `/v1/greynoise?ip=` | GET | `GREYNOISE_API_KEY`（可选） | 是否在全网扫描（noise）、恶意 / 良性分类、RIOT 已知良性服务 |
+| `/v1/crowdsec?ip=` | GET | `CROWDSEC_CTI_KEY`（可选） | CrowdSec 信誉、行为、代理 / VPN / Tor 分类、风险分 |
+| `/v1/virustotal?ip=` | GET | `VT_API_KEY`（可选） | 判定恶意 / 可疑的安全厂商数量 |
+| `/v1/radar?asn=` | GET | `CF_RADAR_TOKEN`（可选） | Cloudflare Radar 近 28 天 ASN 人机流量占比，缓存 6 小时 |
+| `/v1/turnstile/verify` | POST | `TURNSTILE_SECRET_KEY` | `{ "token": "…" }` → `{ success, hostname, challengeTs, errorCodes }` |
+| `/v1/recaptcha/verify` | POST | `RECAPTCHA_SECRET_KEY` | `{ "token": "…" }` → `{ success, score, action, hostname, errorCodes }` |
 
-截至 2026-11-05，三路由代码已部署到 Sites 保存版本 3，访问模式为 `public`。Sites 保存版本与 `/health` 的协议字段 `apiVersion` 分别管理，当前协议值为 2。
+未配置 secret 的路由不出现在 `/health.routes` 里，调用返回 503；前端显示“未配置”，不计分。
 
-- **Proxycheck**：本方授权已配置，正式托管服务已观察到 HTTP 200 成功结果，GitHub origin 的 CORS 匹配。
-- **DB-IP**：正式托管入口返回 HTTP 429、`upstream-daily-quota`；共享服务端出口的免费日额度已用尽，前端保持该来源缺失。
-- **IP2Location**：正式托管入口返回 HTTP 429、`upstream-rate-limit`；当前托管出口受免费额度或频率限制，前端保留失败状态。
+## 获取密钥
 
-本机直接查询成功与托管出口额度分别记录。九源已经集成；当前成功来源数以当轮返回为准。遇到 429 后停止请求，不自动重试、切换出口或规避配额，等待提供方额度恢复。
+- **Turnstile**：Cloudflare 控制台 → Turnstile → Add widget，模式选 Managed，域名填 `blackslience-reaper.github.io`、`127.0.0.1`、`localhost`。site key 写进根目录 `config.js`，secret key 设为 `TURNSTILE_SECRET_KEY`。
+- **reCAPTCHA v3**：https://www.google.com/recaptcha/admin 新建 v3（基于分数），同样三个域名。site key 写进 `config.js`，secret 设为 `RECAPTCHA_SECRET_KEY`。
+- **IP2Location.io**（建议）：注册免费账号，key 设为 `IP2LOCATION_API_KEY`，解决共享出口被限流的问题。
+- **IPQualityScore**（可选）：注册免费账号（每月少量额度），key 设为 `IPQS_API_KEY`。
+- **IPinfo**（可选）：token 设为 `IPINFO_TOKEN`；匿名标记、is_hosting 等字段只有包含它们的套餐才返回，免费 Lite 只有国家与 ASN。
+- **IPRegistry** / **IPData**（可选）：免费 key 分别设为 `IPREGISTRY_API_KEY`、`IPDATA_API_KEY`。
+- **其他可选来源**：ipapi.is、Scamalytics、vpnapi.io、IPHub、GreyNoise、CrowdSec、VirusTotal 都有免费层，注册后把 key 设为上表对应的变量；GetIPIntel 只需要一个能收信的联系邮箱。
+- **AbuseIPDB**（可选）：注册后在 API 页面创建 key，免费每日 1,000 次 check、100 次 check-block。
+- **Cloudflare Radar**（可选）：Cloudflare 控制台 → My Profile → API Tokens，创建带 `Account · Radar · Read` 权限的 token。
 
-## 运行时与发布
+## 安全与限额
 
-- `PROXYCHECK_API_KEY`：本方授权密钥，保存在 Sites 运行时 secret。仓库、前端文件、构建输出和响应均不包含其值。
-- `ALLOWED_ORIGIN`：单个精确 HTTPS origin，默认为 `https://blackslience-reaper.github.io`。不接受路径、尾斜杠、通配符或多个 origin；生产默认不开放 localhost。
+- CORS 只允许 `ALLOWED_ORIGIN`（默认 `https://blackslience-reaper.github.io`）和本地 `http://127.0.0.1:4187`、`http://localhost:4187`；预检只接受 `Accept`、`Content-Type` 头。
+- 查询只接受一个公网 IP 参数，拒绝域名、URL、私网、保留地址；上游响应的目标必须与查询一致。
+- 只访问固定的上游地址，禁止重定向，不转发访客 cookie、Origin 或授权头；错误使用固定文案，不回显上游 URL 或密钥。
+- 每个调用者（平台提供的 `CF-Connecting-IP`）在单个 isolate 内每分钟 30 次，所有路由共享计数；内存计数不跨 isolate 持久化。
+- 成功的查询结果按“来源 + IP”缓存 600 秒；验证路由不缓存。上游 429 原样返回 `Retry-After`，不自动重试。
+- Turnstile / reCAPTCHA 校验会附带平台提供的访客 IP（`remoteip`）。Turnstile token 上限 2,048 字符、请求体上限 4 KB；reCAPTCHA token 上限 8,192 字符、请求体上限 16 KB。请求体按流限长，HTTP 失败原因会回传给页面，避免被误显示为“无分数”。
 
-Sites Worker ESM 打包时，将 `worker.js` 作为 `worker/index.js`，构建为 `dist/server/index.js`；`.openai/hosting.json` 保留该 API Site 的 `project_id`，不配置 `static`。部署名称为 `egress-observatory-api`，不依赖 KV、D1、R2 或额外依赖包。
+## 部署
 
-## 路由与来源
+Sites 的构建目录是本仓库之外的 `.sites-api/`（已在 `.gitignore`）：
 
-- `GET /health`：返回协议版本、来源列表、Proxycheck secret 是否配置的布尔值、缓存与限速参数。它不查询上游，也不返回 secret。
-- `GET /v1/proxycheck?ip={IP}`：向官方 `https://proxycheck.io/v3/{IP}` 请求授权数据；服务端添加本方 key。
-- `GET /v1/dbip?ip={IP}`：向官方 `https://api.db-ip.com/v2/free/{IP}` 查询指定地址，免费每日 500 次。这是 DB-IP 正式服务端 API 的使用方式。
-- `GET /v1/ip2location?ip={IP}`：向官方 `https://api.ip2location.io/?ip={IP}` 查询 Keyless 数据，官方每日 1,000 次额度；不配置或模拟个人密钥。
+```bash
+cp api/worker.js .sites-api/worker/index.js
+cd .sites-api && npm run build
+```
 
-查询必须提供一个明确公网 IPv4 或 IPv6。拒绝域名、URL、端口、重复参数、私有/回环/组播/文档地址、IPv4 映射 IPv6 和特殊用途范围；IPv6 规范化后再次校验上游响应目标。
-
-`OPTIONS` 只允许指定 origin 对 GET 的预检，请求头为 `Accept`、`Content-Type`。其他 origin 返回 403；无 Origin 的服务端调用可以访问。允许来源得到精确 `Access-Control-Allow-Origin`、`Access-Control-Allow-Credentials: true`、`Vary: Origin`；GitHub 前端仍使用 `credentials: omit`。
-
-## 精选返回字段
-
-统一返回来源 ID、数据库、目标 IP、时间、耗时、国家、城市、ASN、组织、网络类型、`flags`、`fieldSources`、状态、错误代码、署名与 `cacheHit`。
-
-- Proxycheck 仅映射明确的 `vpn`、`proxy`、`tor`、`hosting`；`relay`、`abuser`、`bogon` 保持 `null`，`compromised` 不转换为滥用记录。
-- DB-IP 使用实际国家与城市；未提供的 ASN 和安全字段保持 `null`。
-- IP2Location 使用实际位置、ASN、组织及布尔 `is_proxy`；其他风险字段不补值。保留 [IP Geolocation by IP2Location.io](https://www.ip2location.io) 署名。
-
-每次成功结果必须包含匹配目标的 IP 记录。服务端不返回密钥、完整上游响应或请求 URL，不提供任意 URL 转发。前端将精选字段交给 `assessment.js`，数据源默认权重为 Proxycheck 20、DB-IP 20、IP2Location 25；IPinfo 30 仅作用于其实际字段。
-
-## 缓存、频率与上游额度
-
-- 仅访问三个固定官方上游地址，禁止重定向，不转发访客 cookie、Origin 或授权头。错误使用本方固定文案，不记录含密钥的上游 URL。
-- 上游超时为 12 秒；429 返回额度或频率错误，并保留有界 `Retry-After`，不会自动重试。
-- 成功的精选记录在 `caches.default` 中缓存 **600 秒**。缓存 key 区分提供方、规范化目标与缓存版本，不含密钥、访客请求头或 origin。返回浏览器使用 `private, no-store`，CORS 按本次请求生成。
-- 缓存不可用或写入失败时不伪造命中；`cacheHit` 只在读到有效缓存时为真。错误结果不作为成功数据缓存。
-- **每个调用者在单一 Worker isolate 内每分钟最多 10 次，三条查询路由共享此计数。** 只在 `request.cf` 存在时采用平台的 `CF-Connecting-IP`；缺少可信地址时使用共享桶。缓存命中也计数。
-- 内存计数不跨 isolate、区域或重启持久化；各上游的日额度仍独立执行。服务端共享出口可能导致免费额度先于本站频率限制耗尽。
-
-来源说明：[Proxycheck API](https://proxycheck.io/api/) · [Proxycheck 条款](https://proxycheck.io/terms/) · [DB-IP 免费 API](https://db-ip.com/api/free) · [IP2Location API 文档](https://www.ip2location.io/ip2location-documentation)。
-
-本地开发还允许 http://127.0.0.1:4187 与 http://localhost:4187 调用上述公开查询接口。
+构建产物 `dist/server/index.js` 与 `dist/.openai/hosting.json`（保留 `project_id`）交给 Sites 部署，secret 在 Sites 的环境变量里设置。

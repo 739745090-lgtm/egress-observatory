@@ -3,31 +3,120 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="自动识别当前公网 IP，联合多个数据库检测网络属性、风险标记、地理归属及来源分歧。">
-  <meta name="theme-color" content="#0d1219">
+  <meta name="description" content="IP 纯净度检测：联合 20+ 个数据库、16 个黑名单与 ASN 画像，并实测 WebRTC、DNS、TCP 指纹、Cloudflare Turnstile 与 reCAPTCHA，给出可解释的 IP 质量分。">
+  <meta name="theme-color" content="#0b0c0f">
   <meta name="color-scheme" content="dark">
-  <meta name="referrer" content="no-referrer">
-  <title>IP 质量检测 · Egress</title>
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <title>IP 纯净度检测 · Egress</title>
   <link rel="icon" href="./favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="./styles.css?v=1.3">
-  <script type="module" src="./app.js?v=1.3"></script>
+  <link rel="stylesheet" href="./styles.css?v=2.3">
+  <script type="module" src="./src/main.js?v=2.3"></script>
 </head>
 <body>
-  <a class="skip-link" href="#main">跳到检测内容</a>
-  <main id="main" class="ip-page">
-    <header class="page-header">
-      <div class="page-heading"><div class="brand-line"><span class="brand-symbol" aria-hidden="true">◈</span><span>Egress</span><span class="brand-separator">/</span><span>网络工具</span></div><h1 id="page-title">IP 质量检测</h1></div>
-      <div class="query-panel"><form id="assessment-form"><label class="sr-only" for="assessment-ip">当前 IP 自动识别，可输入其他公网 IPv4 或 IPv6</label><input id="assessment-ip" type="text" placeholder="正在识别当前 IP…" autocomplete="off" spellcheck="false" autocapitalize="off"><button id="start-assessment" type="submit">查询</button></form><div class="query-options"><span class="query-hint">自动填入当前公网 IP</span><label class="mask-control"><input id="mask-ip" type="checkbox" checked><span>隐藏 IP</span></label><button id="cancel-assessment" class="text-button" type="button" disabled>取消</button><button id="export-assessment" class="text-button" type="button">导出 <span aria-hidden="true">↗</span></button></div></div>
-      <p class="page-description">多库交叉检测，查看网络属性、风险标记与归属分歧。</p>
-    </header>
-    <div id="assessment-status" class="assessment-status" role="status" aria-live="polite">正在识别当前出口；识别完成后可直接查询。</div>
-    <section id="assessment-summary" aria-label="IP 检测结果"><div class="empty-state"><span class="empty-symbol" aria-hidden="true">◎</span><div><h2>准备检测当前网络</h2><p>点击查询，显示 IP 质量、风险信号和各来源结果。</p></div></div></section>
-    <div class="detail-sections">
-      <details id="raw-data-details" class="detail-panel"><summary><span>原始数据 <small>逐库字段对照</small></span><span class="chevron" aria-hidden="true">⌄</span></summary><div class="detail-content"><div class="matrix-help"><span><i class="dot-hit"></i>命中</span><span><i class="dot-clear"></i>明确为否</span><span><i class="dot-unknown"></i>未提供</span><span class="scroll-hint">横向滑动查看全部字段 ↔</span></div><div id="database-matrix" class="matrix-wrap" role="region" aria-label="数据库原始字段，窄屏可横向滚动" tabindex="0"><p class="empty-detail">等待本轮查询结果。</p></div></div></details>
-      <details id="weight-settings" class="detail-panel"><summary><span>评分设置 <small>来源权重与地区偏好</small></span><span class="chevron" aria-hidden="true">⌄</span></summary><div class="detail-content"><div class="country-setting"><label for="expected-country">期望国家</label><input id="expected-country" type="text" placeholder="可选，如 JP" maxlength="2" autocomplete="off" spellcheck="false" autocapitalize="characters"><span>留空按多库共识评估</span></div><div id="weight-controls"></div></div></details>
-      <details class="detail-panel"><summary><span>检测方法 <small>评分依据与数据归属</small></span><span class="chevron" aria-hidden="true">⌄</span></summary><div class="detail-content"><div id="score-panel"><p class="empty-detail">查询后显示本轮评分维度与来源贡献。</p></div></div></details>
-    </div>
-    <footer><span>未知字段保持缺失，检测结果描述本轮观测。</span><a href="https://github.com/BlackSlience-Reaper/egress-observatory" target="_blank" rel="noopener noreferrer">Egress · GitHub ↗</a></footer>
+  <a class="skip-link" href="#main">跳到检测结果</a>
+  <div class="progress-track" aria-hidden="true"><i id="progress"></i></div>
+  <header class="topbar">
+    <a class="brand" href="./"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18M3.5 9h17M3.5 15h17"/></svg><span>Egress</span><em>IP 质量检测</em></a>
+    <nav><a href="#breakdown-card">评分明细</a><a href="#method">评分算法</a><a href="https://github.com/BlackSlience-Reaper/egress-observatory" target="_blank" rel="noopener noreferrer">GitHub ↗</a></nav>
+  </header>
+
+  <main id="main" class="wrap">
+    <section class="hero card">
+      <div class="hero-left">
+        <h1>IP 纯净度检测：你的 IP 有多干净？</h1>
+        <div class="score-row">
+          <div id="score-ring" class="score-ring" role="img" aria-label="正在检测">
+            <svg viewBox="0 0 120 120" class="ring" aria-hidden="true"><circle cx="60" cy="60" r="52" class="ring-track"/></svg>
+            <div class="ring-text"><strong>—</strong><span>检测中</span></div>
+          </div>
+          <div id="verdict" class="verdict"><p class="verdict-text muted">正在联合数据库、黑名单与连接实测生成评分…</p></div>
+        </div>
+        <div class="hero-actions">
+          <button id="share" type="button" class="accent"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 10V2.5M5 5.2 8 2.3l3 2.9M3 8.5v4.2h10V8.5"/></svg>分享</button>
+          <button id="export" type="button" class="ghost">导出报告</button>
+          <button id="rerun" type="button" class="ghost">重新检测</button>
+        </div>
+
+        <section class="block">
+          <div class="block-head"><h2>地址信息</h2><button id="mask-toggle" type="button" class="chip-btn" aria-pressed="false">隐藏 IP</button></div>
+          <dl id="addr" class="addr"></dl>
+        </section>
+        <section class="block">
+          <div class="block-head"><h2>你的出口 IP</h2><span class="muted small">不同网站看到的 IP · 点击可检测</span></div>
+          <div id="egress"></div>
+        </section>
+        <section class="block" id="asn-card">
+          <div class="block-head"><h2>ASN 画像</h2><span class="muted small">宣告方是谁、是什么网络、地址段是否租来的</span></div>
+          <div id="asn"></div>
+        </section>
+      </div>
+
+      <div class="hero-right">
+        <form id="query" class="query" autocomplete="off">
+          <label class="sr-only" for="ip-input">要检测的 IPv4 或 IPv6 地址</label>
+          <input id="ip-input" type="text" inputmode="text" placeholder="输入 IPv4 或 IPv6 地址" spellcheck="false" autocapitalize="off">
+          <button type="submit" class="accent">查询</button>
+          <button type="button" id="self-check" class="ghost self-check" title="重新识别本机当前的出口 IP 并检测（含连接实测）"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.5"/><circle cx="8" cy="8" r="1.6"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2"/></svg>测本机出口</button>
+        </form>
+        <p id="status" class="status" role="status" aria-live="polite">正在识别你的出口 IP…</p>
+
+        <h2 class="section-title">检测结论</h2>
+        <div id="checks" class="tiles"></div>
+
+        <h2 class="section-title">能用来做什么</h2>
+        <div id="uses" class="uses"></div>
+
+        <div id="live-section" hidden>
+          <h2 class="section-title">实测：你的连接 <small>只在检测自己的出口时运行</small></h2>
+          <div id="live" class="tiles"></div>
+          <h2 class="section-title">实测：人机验证</h2>
+          <div id="captcha" class="captcha"></div>
+          <div id="turnstile-slot" class="turnstile-slot"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card" id="breakdown-card"><h2 class="card-title">评分明细 <small>基准 92，正面证据加分、风险扣分，每类有上限；悬停查看依据</small></h2><div id="breakdown" class="breakdown"></div></section>
+
+    <section class="card"><h2 class="card-title">多源 IP 类型 <small>使用类型：这个地址怎么用；公司类型：持有它的是什么机构</small></h2><div id="types" class="table-wrap"></div></section>
+
+    <section class="card"><h2 class="card-title">地理位置多源对比 <small>标红的行与共识国家不同</small></h2><div id="geo" class="table-wrap"></div></section>
+
+    <section class="card"><h2 class="card-title">数据来源</h2><div id="sources"></div></section>
+
+    <section class="card method" id="method">
+      <h2 class="card-title">评分算法</h2>
+      <div class="method-grid">
+        <div>
+          <h3>总分</h3>
+          <p><code>总分 = 92 + 安全加分（≤ 8）− Σ min(类别上限, 类别内扣分)</code>，封顶 100。干净但缺少正面证据的 IP 停在 92；多库一致干净、邻居干净、ASN 信誉好等正面证据把它推向 100。Tor 出口最高 25 分。</p>
+          <p>重点是<b>安全</b>：匿名化（上限 45）、滥用与黑名单（40）、邻居与 ASN 信誉（25）占大头；网络类型与 ASN 画像（20）、原生与定位（8）只是描述性提示。检测本机出口时另算连接实测（50），与 IP 信誉分开显示。</p>
+          <h3>多源投票</h3>
+          <p>同一标签按来源可靠度加权：<code>E = P ÷ (P + 0.5 × N)</code>，P、N 是命中与明确未命中来源的权重和；被检出比没检出更有信息量，未命中只算半票，没返回的字段不当作“否”。扣分 = 满分 × E。直接观测（Shodan 看到代理端口、公开代理 / Tor 列表、OTX 等）按 <code>1 − Π(1 − w)</code> 叠加，不会被“数据库没归类”稀释。欺诈分取 0.6 × 加权平均 + 0.4 × 最高分。IPinfo 权重最高（定位 1.6、标签 1.3），同源数据库（MaxMind 系、DB-IP 系）只算一票。</p>
+        </div>
+        <div>
+          <h3>邻居与 ASN 信誉</h3>
+          <p><b>邻居</b>：同一 /24 里其他地址在 FireHOL、blocklist.de、GreenSnow、StopForumSpam、CyberCrime、DShield 中上榜的数量：1–2 个扣 3，3–9 个扣 6，10–29 个扣 10，30 个以上扣 14；整段被列入扣 15；同段有 Tor 中继扣 3。</p>
+          <p><b>ASN 信誉</b>：把 ASN 宣告的全部 IPv4 与地址级威胁列表比对，算出每万个地址的上榜数，再除以全网平均：2 倍以上扣 3，5 倍 6，15 倍 9，50 倍 12；另计 Cloudflare Radar 机器流量与 RPKI 无效。</p>
+          <h3>安全加分</h3>
+          <p>多库一致干净 +2 · 邻居干净 +2 · ASN 信誉良好（低于均值一半）+2 · 可信的运营商家宽 / 移动网络 +1.5 / +2 · 原生 +0.5 · RPKI 有效 +0.5 · Turnstile 直接放行 +1 · reCAPTCHA ≥ 0.9 +2。</p>
+        </div>
+        <div>
+          <h3>匿名化与滥用</h3>
+          <p>Tor 40 · 代理 20 · VPN 18 · 爬虫 8 · 隐私中继 5。欺诈 / 风险分 × 0.3（IPQualityScore、Scamalytics、AbuseIPDB、Proxycheck 等）· 滥用标记 10 · DNS 黑名单每个 4–6（上限 20）· 威胁列表最严重者 6–15，每多一个 +2 · OTX 报告 3–10 · VirusTotal 3–12 · StopForumSpam 3–12 · 已知漏洞 6。</p>
+          <h3>类型提示（低权重）</h3>
+          <p>机房 15 · 商业 2 · 租赁地址段 3 · 新 ASN 2 · 家宽标签与机房 ASN 不符 5 × 机房倾向 · 骨干网下的家宽标签 2（骨干网本身可靠，只是标签存疑）· 广播 IP 3 · 定位分歧 ≤ 5。标签渐变表示证据混合，带 ? 的表示把握不足，悬停可看依据。</p>
+          <h3>连接实测</h3>
+          <p>WebRTC 泄漏 15–20 · DNS 泄漏 8、来自中国大陆 12、公共 DNS 跨区 3、EDNS 子网暴露 10 · TCP 指纹像代理转发 10 · IPv6 绕过代理 8 · 时区不符 6 · 多出口 3 · 语言不符 2 · Turnstile 需要验证 8、未通过 15 · reCAPTCHA 低于 0.7 线性扣到 20。</p>
+        </div>
+      </div>
+      <p class="muted small">分数是基于公开数据的可解释估计，不代表任何网站的真实风控结论。目标 IP 会发送给上表中的数据服务；页面不设账号、不做统计追踪。</p>
+    </section>
+
+    <footer class="footer">
+      <div><span class="muted">更多工具交叉验证：</span><span id="crosslinks" class="crosslinks"></span></div>
+      <p class="muted small">IP Geolocation by <a href="https://db-ip.com" target="_blank" rel="noopener noreferrer">DB-IP</a> (CC BY 4.0) · <a href="https://www.ip2location.io" target="_blank" rel="noopener noreferrer">IP2Location.io</a> · GeoLite2 by <a href="https://www.maxmind.com" target="_blank" rel="noopener noreferrer">MaxMind</a> via RIPEstat · 国旗图片 flagcdn.com</p>
+    </footer>
   </main>
 </body>
 </html>

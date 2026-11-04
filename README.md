@@ -1,64 +1,60 @@
-# Egress · IP 质量检测
+# Egress · IP 纯净度检测
 
-**v1.3 · 2026-11-05**
+**v2.0 · 2026-11-05**
 
-一个深色 IP 检测页面：打开后自动填入当前公网出口，点击“查询”后联合九个数据源，展示质量参考、风险标记和地理分歧。
+打开即检测本机出口 IP：联合 20 多个 IP 数据库、16 个 DNS 黑名单、17 个威胁、代理与机房列表、同 /24 邻居和整个 ASN 的信誉，再用你当前的浏览器和网络实测 WebRTC、DNS、TCP 指纹、IPv6、Cloudflare Turnstile 与 Google reCAPTCHA，给出一个能说清每一分扣在哪里的质量分。
 
-[打开网站](https://blackslience-reaper.github.io/egress-observatory/) · [GitHub 仓库](https://github.com/BlackSlience-Reaper/egress-observatory)
+[打开网站](https://blackslience-reaper.github.io/egress-observatory/) · 评分规则见 [SCORING.md](SCORING.md) · 后端见 [api/README.md](api/README.md)
 
-## 使用
+## 用法
 
-1. 开页只请求一次 [ipify](https://www.ipify.org/) 获取公网出口并填入输入框。已经开始手动输入的地址会保留，完整检测由“查询”按钮启动。
-2. 输入或确认一个公网 IPv4 / IPv6，点击 **查询**。九个来源针对同一目标并行返回结果，失败和未知字段单独保留。
-3. 查看顶部 IP 概览与渐变质量指针、左侧环形分数和城市对照、右侧六项检测结论与 ASN，以及底部来源状态标签。
-4. **原始数据**、**评分设置**、**检测方法** 默认折叠，展开后可查看逐库字段、调整来源权重与可选期望国家。**取消**终止本轮请求；**导出**生成本地 JSON 报告，默认隐藏 IP。
+- 打开页面自动识别本机出口并检测；**测本机出口** 按钮随时重新识别（切换代理节点后用它）。
+- 输入任意公网 IPv4 / IPv6 查询别人的地址；此时只计算 IP 信誉，连接实测不适用。`?ip=1.2.3.4` 可直接分享。
+- **隐藏 IP** 遮住页面上所有地址，方便截图；**导出报告** 生成本地 JSON，隐藏状态下 IP 一并打码。
 
-自动填入的地址是当前浏览器访问 ipify 时所见的公网出口，受代理和分流规则影响；局域网网卡地址不在本页采集范围。自动识别失败时可直接输入目标地址。
+## 检测内容
 
-## 九个自动来源
+| 部分 | 内容 |
+| --- | --- |
+| IP 情报库 | IPinfo（权重最高）、Proxycheck、ip-api.com、IP2Location、DB-IP（经后端）；IPLocate、GeoIPLookup、TechnikNews IPgeo（主来源失败时补充）；可选 IPQualityScore、Scamalytics、IPRegistry、IPData、vpnapi.io、IPHub、GetIPIntel、AbuseIPDB（需各自 key）；IPQuery、ipapi.is、IPinfo、ipwho.is、IP.SB、ipleak（MaxMind）、GeoJS、ipapi.co、iplocation.net、FreeIPAPI、GeoLite2（RIPEstat）、Blackbox v3 beta、Cloudflare（仅本机） |
+| 注册与路由 | RDAP（各 RIR）、ip.guide、Net Atlas（IPtoASN / DB-IP City Lite）、RIR 分配记录、RIPEstat 前缀 / 路由 / RPKI、PeeringDB、RDAP autnum |
+| 威胁与扫描 | Shodan InternetDB（端口与代理标签）、StopForumSpam、Tor Project Onionoo、AlienVault OTX、PTR 反查；可选 GreyNoise、CrowdSec CTI、VirusTotal、AbuseIPDB |
+| 黑名单 | SpamCop、Barracuda、PSBL、Mailspike、UCEPROTECT、GBUdb、NordSpam、JustSpam、SEM、SPFBL、0spam、InterServer、blocklist.de、S5H、DroneBL、dan.me.uk Tor（经 DNS-over-HTTPS） |
+| 列表 | FireHOL Level 1/2/3、IPsum（≥3 个黑名单）、blocklist.de、GreenSnow、CyberCrime、ET 已入侵主机、CINS Army、BotScout、StopForumSpam 7 天、DShield 攻击网段、公开 SOCKS / HTTPS 代理、Tor 出口、X4BNet 机房段与 VPN 段（IPv4） |
+| 邻居与 ASN 信誉 | 同 /24 其他地址的上榜数、整段是否被列入、同段 Tor 中继；整个 ASN 宣告空间的滥用密度与全网平均之比 |
+| 多源 IP 类型 | 各库给出的使用类型（家宽 / 移动 / 商业 / 机房…）与公司类型，逐源对照 |
+| ASN 画像 | 推断网络类型（运营商 / 移动 / 机房 / CDN / 骨干 / 企业 / 教育）、PeeringDB 自报、宣告规模、注册日期、RPKI、可选 Cloudflare Radar 机器流量占比、地址段租赁判断 |
+| 连接实测 | 各网站看到的出口、WebRTC、DNS 解析器与 EDNS 子网、TCP/IP SYN 指纹、时区与语言、IPv6、Cloudflare WARP、Turnstile、reCAPTCHA v3 |
 
-- **[IPinfo](https://support.ipinfo.io/hc/en-us/articles/34121895556242-Legacy-Free-API-vs-IPinfo-Lite)**：官方 Legacy Public API，免 token，返回实际位置与 ASN。默认权重 30，未返回的隐私字段保持缺失。
-- **[IP2Location.io](https://www.ip2location.io/ip2location-documentation)**：服务端调用官方 Keyless API，提供实际位置、ASN 与 `is_proxy`。默认权重 25，保留 IP Geolocation by IP2Location.io 署名。
-- **[ipapi.is](https://ipapi.is/free-tier.html)**：匿名层的位置、网络归属与 Bogon。默认权重 25，完整安全字段需要提供方授权。
-- **[Proxycheck](https://proxycheck.io/api/)**：服务端使用本方授权，返回明确的 VPN、Proxy、Tor、Hosting 等精选分类，默认权重 20。
-- **[IPQuery](https://ipquery.io/sources)**：明确归属的分类参与评分，默认权重 20；未命名 Enterprise MMDB 的地理字段只作旁证。
-- **[DB-IP](https://db-ip.com/api/free)**：服务端使用官方免费 API 查询目标国家与城市，默认权重 20，保留 IP Geolocation by DB-IP 署名。
-- **[ipwho.is](https://ipwhois.io/documentation)**：位置与网络归属，默认权重 15；免费层未提供的 Security Data 保持未知。
-- **[FreeIPAPI](https://freeipapi.com/data-sources)**：来源包含 DB-IP（CC BY 4.0），逐字段上游未完全披露。聚合结果单列旁证，不重复计入 DB-IP 或其他库。
-- **[RIPEstat / RIS](https://stat.ripe.net/docs/data-api/api-endpoints/network-info)**：公告前缀与 ASN 路由证据，校验目标属于返回前缀，不计入风险分。
+评分以安全为主：IP 自身记录、邻居和 ASN 信誉权重最高；基准 92 分，正面证据最多加 8 分。**ASN 交叉核对**作为低权重提示：IP 被数据库标成家宽，但宣告它的 ASN 被推断为机房、CDN 或骨干网，会单独扣分并在“ASN 一致性”里说明原因；子分配给其他公司、近期登记或由 IP 租赁平台管理的地址段标为“租赁 / 转售”。
 
-权重只作用于真实返回的字段。同一底层库的同字段去重后融合；目标不匹配、请求失败和未提供的字段保持 `null`，不会补成阴性 `false`。
+## 配置
 
-## 评分与呈现
+公开服务的间接补充见 [DATA-SOURCES.md](DATA-SOURCES.md)：TechnikNews IPgeo 只在本轮主 ip-api 查询失败后补充；Blackbox 使用公开 v3 beta 的分项分类，替换含义过宽的 Y/N 判断；Net Atlas 补充网络归属、前缀与 DB-IP City Lite 地理数据，同库按字段去重。
 
-“综合参考分 · 含类型适配”由 **匿名与滥用风险 70% / 网络类型适配 20% / 地区一致性 10%** 构成。VPN、Proxy、Tor、Relay 先逐字段按数据库融合，再取已知字段中的最低分作为关联匿名组分数；组权重为这些字段的已知权重之和。Abuser 与 Bogon 分别计分。
-
-Hosting 说明机房类型，属于本项目的网络适配刻度，不等同滥用证据。明确的 Tor、Abuser、Bogon 命中保留独立提醒。地区偏好未填写时展示多库国家共识，城市分歧继续按来源呈现。
-
-覆盖率描述实际获得的指标权重，交叉确认描述同字段有多少独立来源。覆盖不足、分歧或独立风险证据不足时标为暂定；有效覆盖低于 20%、没有风险字段或目标冲突时暂不生成总分。高分不代表所有指标已检查，也不是账号或服务可用概率。
-
-原站评分方向、公开阈值和披露边界见 [评分来源核对与实现建议](SCORING-SOURCES.md)。研究文档提及的其他服务不表示已接入自动查询。
-
-## 托管与当前限制
-
-前端位于 GitHub Pages；Proxycheck、DB-IP、IP2Location 的公开只读适配器位于 Sites。密钥仅存 Sites 运行时 secret，仓库和前端不包含其值。
-
-成功的服务端结果缓存 **600 秒**；三条查询路由共享每调用者、每 Worker isolate **10 次/分钟**的内存限速，不能替代各上游日额度。详细路由、返回字段和额度见 [API 说明](api/README.md)。
-
-2026-11-05 的正式托管调用中，Proxycheck 已返回成功记录；DB-IP 返回 `429 upstream-daily-quota`，IP2Location 返回 `429 upstream-rate-limit`。后两项受共享托管出口的免费额度或频率限制，保持缺失，不自动重试或更换出口。九源已集成，实际成功数量以本轮结果为准。
+`config.js` 只放公开值：后端地址、Turnstile site key、reCAPTCHA site key。key 留空时对应实测显示“未配置”，不影响其他评分。两个 key 都要登记这些域名：`blackslience-reaper.github.io`、`127.0.0.1`、`localhost`。密钥只放在后端运行时 secret，见 [api/README.md](api/README.md)。
 
 ## 本地运行
 
-```powershell
+```bash
 python -m http.server 4187 --bind 127.0.0.1
 ```
 
-在仓库目录运行后打开 [本地入口](http://127.0.0.1:4187/)。ES modules 需要 HTTP/HTTPS 静态服务。生产前端从 `main` 分支根目录发布，使用相对资源路径与 `.nojekyll`。
+打开 http://127.0.0.1:4187/ 。后端只允许 GitHub Pages 和本地 4187 端口跨域调用。加 `?captchaTest=1`（仅本地）会用 Cloudflare 的测试 key 跑一遍 Turnstile 流程，结果恒为通过。
 
-`app.js` 负责公网地址填入与页面初始化；`dashboard.js` 编排查询；`visuals.js` 呈现深色结果布局；`providers.js` 规范化响应；`assessment.js` 计算参考分；`api/worker.js` 提供三个服务端适配器。
+双击“启动网站.cmd”也可以启动本地页面。
 
-## 数据流
+## 代码结构
 
-开页的自动地址识别与点击“查询”后的九源请求分别触发，前端请求使用 `credentials: omit`。目标 IP 会发送到对应数据服务；服务端查询描述明确指定的目标，浏览器请求出口由当前网络决定。
+- `src/main.js` 编排：识别出口、并发查询、结果到达即重新评分。
+- `src/sources.js` 各数据源适配器，统一成同一结构；未返回的字段保持 `null`，不当作“否”。
+- `src/blocklists.js` DNS 黑名单（DoH）与 CIDR 列表。
+- `src/asn.js` ASN 档案、类型推断与租赁判断。
+- `src/probes.js`、`src/captcha.js` 连接实测与人机验证。
+- `src/score.js` 评分引擎，保留每项扣分的来源与解释。
+- `src/render.js`、`styles.css` 页面呈现。
+- `api/worker.js` 后端（Cloudflare Worker ESM，部署在 Sites）。
 
-报告由浏览器本地生成，隐藏开关决定是否导出完整目标 IP。页面没有账号系统、分析追踪或后台轮询；GitHub Pages、Sites 和上游服务分别处理自己的访问日志。服务端仅保留短期查询缓存和频率计数。
+## 隐私
+
+被检测的 IP 会发送给上面列出的数据服务；连接实测会让浏览器访问 STUN、bash.ws、ip-api EDNS、tcpip.incolumitas.com、Cloudflare 与 Google。页面没有账号、统计或追踪，导出报告在浏览器本地生成。分数是基于公开数据的估计，不代表任何网站的真实风控结论。
