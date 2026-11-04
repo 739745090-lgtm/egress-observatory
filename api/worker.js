@@ -54,7 +54,8 @@ function publicIP(value) {
   return special ? null : ip;
 }
 
-function allowedOrigin(env) {
+function allowedOrigin(env, requestedOrigin = null) {
+  if (requestedOrigin === 'http://127.0.0.1:4187' || requestedOrigin === 'http://localhost:4187') return requestedOrigin;
   const value = env.ALLOWED_ORIGIN === undefined ? DEFAULT_ORIGIN : String(env.ALLOWED_ORIGIN);
   try {
     const url = new URL(value);
@@ -262,7 +263,7 @@ async function getPublicUpstream(providerId, ip) {
 }
 
 async function handle(request, env, ctx) {
-  const permitted = allowedOrigin(env);
+  const permitted = allowedOrigin(env, request.headers.get('Origin'));
   if (!permitted) return failure(503, 'origin-configuration', '服务端来源配置无效。', null);
   const sentOrigin = request.headers.get('Origin');
   if (sentOrigin !== null && sentOrigin !== permitted) return failure(403, 'origin-denied', '此来源未获允许。', null);
@@ -321,7 +322,7 @@ export default {
   async fetch(request, env = {}, ctx) {
     try { return await handle(request, env, ctx); }
     catch {
-      const permitted = allowedOrigin(env);
+      const permitted = allowedOrigin(env, request.headers.get('Origin'));
       const origin = permitted && request.headers.get('Origin') === permitted ? permitted : null;
       return failure(500, 'internal-error', '接口暂时无法处理请求。', origin);
     }

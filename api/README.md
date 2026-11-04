@@ -52,3 +52,5 @@ Sites Worker ESM 打包时，将 `worker.js` 作为 `worker/index.js`，构建�
 - 内存计数不跨 isolate、区域或重启持久化；各上游的日额度仍独立执行。服务端共享出口可能导致免费额度先于本站频率限制耗尽。
 
 来源说明：[Proxycheck API](https://proxycheck.io/api/) · [Proxycheck 条款](https://proxycheck.io/terms/) · [DB-IP 免费 API](https://db-ip.com/api/free) · [IP2Location API 文档](https://www.ip2location.io/ip2location-documentation)。
+
+本地开发还允许 http://127.0.0.1:4187 与 http://localhost:4187 调用上述公开查询接口。
