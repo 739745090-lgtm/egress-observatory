@@ -1,12 +1,12 @@
 import { SOURCES, EXPERIENCES } from './data.js';
-import { mountScore, getScoreReport, setCurrentIPPure, setDatabaseObservation, setScoreTarget } from './score.js';
+import { initAssessment, runAssessment, renderAssessment, cancelAssessment, getAssessmentReport } from './dashboard.js';
 
 const $ = (id) => document.getElementById(id);
 const state = { endpoints: [], claude: [], lookup: [], lookupTarget: '', rtc: null, busy: false, controllers: new Set(), filter: 'all', observedAt: null };
 const pages = {
-  overview: ['网络概览', '从当前浏览器出发，观察每一条出口。'],
+  overview: ['综合测评', '一次查询，融合多库数据，生成可追溯的质量判断。'],
   lookup: ['IP 数据对照', '保留来源、时间与分歧，让每个结论都有出处。'],
-  score: ['综合评分', '按底层数据库加权，看到分数，也看到证据覆盖率。'],
+  score: ['评分依据', '从原始字段到来源贡献，解释每一步计算。'],
   claude: ['Claude 观测', '分别观察网络响应、出口信息与官方服务状态。'],
   sources: ['来源目录', '从实际使用经验出发，明确每个数据源的能力。'],
   notes: ['经验与方法', '把配置中遇到的问题，变成可解释的观测方法。'],
@@ -31,11 +31,13 @@ function normalizeIP(input) {
 function canonical(ip) { return normalizeIP(String(ip || '')) || String(ip || '').toLowerCase(); }
 function timeString(time) { return new Date(time).toLocaleString('zh-CN', { hour12:false }); }
 function route() {
+  if(location.hash === '#main') return;
   const key = location.hash.slice(1) in pages ? location.hash.slice(1) : 'overview';
   document.querySelectorAll('.view').forEach(n => { n.hidden = n.id !== key; });
   document.querySelectorAll('nav a[href^="#"]').forEach(n => { const active = n.hash === `#${key}`; n.classList.toggle('active', active); if(active) n.setAttribute('aria-current','page'); else n.removeAttribute('aria-current'); });
   $('page-title').textContent = pages[key][0]; $('page-subtitle').textContent = pages[key][1];
   document.title = `${pages[key][0]} · EGRESS 出口观测站`;
+  requestAnimationFrame(()=>window.scrollTo({top:0,left:0,behavior:'instant'}));
 }
 window.addEventListener('hashchange', route);
 
@@ -59,14 +61,16 @@ async function request(url, { format='json', mode='cors', timeout=11000 } = {}) 
 function parseTrace(text) { return Object.fromEntries(text.trim().split('\n').filter(x => x.includes('=')).map(x => { const i=x.indexOf('='); return [x.slice(0,i), x.slice(i+1)]; })); }
 function busy(value) {
   state.busy=value;
-  ['run-all','run-claude','lookup-submit','run-webrtc'].forEach(id => { $(id).disabled=value; });
+  ['run-all','run-claude','lookup-submit','run-webrtc','start-assessment'].forEach(id => { $(id).disabled=value; });
   $('cancel-run').disabled=!value;
+  $('cancel-assessment').disabled=!value;
 }
 function fieldsCard(result) {
   const card = el('article','result-card card');
   const head = el('div','result-head'); head.append(el('h3','',result.name));
   const status = result.idle ? ['neutral','待观测'] : result.pending ? ['neutral','观测中'] : result.error ? ['warn','未取得结果'] : ['ok',result.opaque ? '响应不可读' : '已取得数据'];
   if (result.opaque) status[0]='warn';
+  if (result.unknown) {status[0]='warn';status[1]='未观测到公网候选';}
   head.append(el('span',`badge ${status[0]}`,status[1])); card.append(head);
   if (result.subtitle) card.append(el('p','muted small', result.subtitle));
   if(result.idle) { card.append(el('p','muted','点击开始后记录本次响应。')); return card; }
@@ -116,7 +120,6 @@ async function runEndpoints() {
         if(def.kind==='trace') fields.push(['地区代码',data.loc],['CDN 接入点',data.colo],['TLS / HTTP',`${data.tls || '—'} / ${data.http || '—'}`]);
         if(def.kind==='pure') {
           fields.push(['国家 / 城市',`${data.countryCode || data.country || '未提供'} / ${data.city || '未提供'}`],['ASN',data.asn ? `AS${String(data.asn).replace(/^AS/,'')}` : '未提供'],['风险系数',typeof data.fraudScore==='number'?`${data.fraudScore} / 100（越低越好）`:'未提供'],['住宅标签',typeof data.isResidential==='boolean'?(data.isResidential?'是':'否'):'未提供']);
-          setCurrentIPPure({...data,observedAt:response.observedAt});
         }
         state.endpoints[index]={...def,...response,ip,fields,pending:false,data:undefined,note:def.kind==='trace'?'接入点表示 CDN 处理请求的位置。':def.kind==='pure'?'这是 IPPure 的站方判断，底层来源未公开的字段单独保留。':'耗时包含 DNS、TLS、浏览器和服务器处理时间。'};
       } catch(error) { state.endpoints[index]={...def,error:error.message,pending:false}; }
@@ -126,63 +129,13 @@ async function runEndpoints() {
   } finally { busy(false); }
 }
 
-function renderLookup() {
-  $('lookup-results').replaceChildren(...state.lookup.map(fieldsCard));
-  if(state.lookupTarget && state.lookup.some(x=>!x.error && !x.pending)) {
-    const action=el('div','callout'); const button=el('button','secondary','带此 IP 进入综合评分 →');
-    const target=state.lookupTarget;
-    button.addEventListener('click',()=>{if(setScoreTarget(target))location.hash='score';});
-    action.append(button,el('p','small muted','支持引用匹配目标的 IPinfo 国家数据；其他数据库字段按实际取得的证据补充。'));
-    $('lookup-results').append(action);
-  }
-}
+function renderLookup() {}
 async function lookup(event) {
-  event.preventDefault(); if(state.busy)return;
-  let target=$('ip-input').value.trim();
-  if(target && !normalizeIP(target)) { $('lookup-status').textContent='请输入有效的公网 IPv4 或 IPv6 地址。'; return; }
-  busy(true); $('lookup-status').textContent='正在查询；目标 IP 将发送至所列数据服务。'; state.lookup=[]; renderLookup();
-  try {
-    if(!target) { const r=await request('https://api64.ipify.org?format=json'); target=r.data.ip; }
-    target=normalizeIP(target); if(!target)throw new Error('未能取得有效公网 IP');
-    state.lookupTarget=target;
-    const defs=[
-      {id:'ipinfo',name:'IPinfo 数据库',subtitle:'官方 Legacy API · 地理 / ASN',url:`https://ipinfo.io/${encodeURIComponent(target)}/json`},
-      {id:'ipwhois',name:'ipwho.is',subtitle:'地理 / ASN · 独立保留来源',url:`https://ipwho.is/${encodeURIComponent(target)}`},
-      {id:'freeipapi',name:'FreeIPAPI',subtitle:'地理 / ASN · 包含 DB-IP 数据',url:`https://free.freeipapi.com/api/v1/json/${encodeURIComponent(target)}`},
-      {id:'ripe',name:'RIPEstat / RIS',subtitle:'BGP 路由公告 · 不参与地理投票',url:`https://stat.ripe.net/data/network-info/data.json?resource=${encodeURIComponent(target)}&sourceapp=egress-observatory`},
-    ];
-    state.lookup=defs.map(x=>({...x,pending:true}));renderLookup();
-    await Promise.all(defs.map(async(def,index)=>{
-      try {
-        const r=await request(def.url);const d=r.data;
-        if(d.success===false || d.status==='error' || d.error)throw new Error(String(d.message || d.reason || '来源未返回数据'));
-        let fields, country;
-        if(def.id==='ripe') {
-          if(!d.data || !Array.isArray(d.data.asns)) throw new Error('来源响应缺少路由信息');
-          fields=[['查询目标',target,true],['公告 ASN',d.data.asns.length?d.data.asns.map(x=>`AS${x}`).join(', '):'未提供'],['公告前缀',d.data.prefix || '未提供',true]];
-        } else if(def.id==='ipinfo') {
-          if(canonical(d.ip)!==canonical(target))throw new Error('返回 IP 与查询目标不一致，已弃用结果');
-          country=d.country;
-          fields=[['查询目标',d.ip,true],['国家 / 地区',country || '未提供'],['城市 / 区域',[d.city,d.region].filter(Boolean).join(' / ') || '未提供'],['ASN / 组织',d.org || '未提供'],['隐私风险数据','本接口未提供，保持缺失']];
-          setDatabaseObservation({database:'ipinfo',ip:target,country,observedAt:r.observedAt,sourceUrl:def.url});
-        } else if(def.id==='ipwhois') {
-          if(canonical(d.ip)!==canonical(target))throw new Error('返回 IP 与查询目标不一致，已弃用结果');
-          country=d.country_code;
-          fields=[['查询目标',d.ip,true],['国家 / 地区',`${d.country || '—'} (${country || '—'})`],['城市 / 区域',[d.city,d.region].filter(Boolean).join(' / ') || '未提供'],['ASN',d.connection?.asn?`AS${d.connection.asn}`:'未提供'],['组织',d.connection?.org || d.connection?.isp || '未提供']];
-        } else {
-          if(canonical(d.ipAddress)!==canonical(target))throw new Error('返回 IP 与查询目标不一致，已弃用结果');
-          country=d.countryCode;
-          fields=[['查询目标',d.ipAddress,true],['国家 / 地区',`${d.countryName || '—'} (${country || '—'})`],['城市 / 区域',[d.cityName,d.regionName].filter(Boolean).join(' / ') || '未提供'],['ASN',d.asn ? `AS${d.asn}`:'未提供'],['组织',d.asnOrganization || '未提供'],['代理标签',typeof d.isProxy==='boolean'?(d.isProxy?'是':'否'):'未提供']];
-        }
-        state.lookup[index]={...def,...r,data:undefined,fields,country,pending:false,note:def.id==='freeipapi'?'来源：FreeIPAPI，数据包含 DB-IP（CC BY 4.0）；与直接引用 DB-IP 的结果存在相关性。':def.id==='ripe'?'路由公告快照可能存在更新延迟。':'当前免费接口提供地理与 ASN，不包含隐私风险字段。'};
-      } catch(error) {state.lookup[index]={...def,error:error.message,pending:false};}
-      renderLookup();
-    }));
-    const countries=new Set(state.lookup.map(x=>x.country).filter(Boolean));const count=state.lookup.filter(x=>!x.error).length;
-    $('lookup-status').textContent=`查询结束，${count} / ${defs.length} 个来源返回数据。${countries.size>1?'国家结论存在分歧，请保留各库原始结果。':countries.size===1?'已返回的国家结论未见分歧。':'地理证据不足。'}`;
-  } catch(error) {$('lookup-status').textContent=error.message;} finally {busy(false);}
+  event.preventDefault();
+  $('assessment-ip').value=$('ip-input').value;
+  location.hash='overview';
+  await runAssessment();
 }
-
 function renderClaude() { $('claude-results').replaceChildren(...state.claude.map(fieldsCard)); }
 async function runClaude() {
   if(state.busy)return;busy(true);$('claude-note').textContent='正在观察官方状态、Claude 路径与 API 域名的响应…';
@@ -245,6 +198,7 @@ async function runRTC() {
     const httpIPs=new Set(state.endpoints.filter(x=>x.ip).map(x=>canonical(x.ip)));
     const differs=publicOnes.some(x=>{const peers=[...httpIPs].filter(ip=>ip.includes(':')===x.address.includes(':'));return peers.length && !peers.includes(canonical(x.address));});
     state.rtc={observedAt:new Date().toISOString(),duration:Math.round(performance.now()-started),fields:unique.length?unique.map(x=>[`${x.type} / ${x.protocol}`,x.address,true]):[['观测结果','本次未取得 ICE 候选']],note:differs?'公网候选与已观测的同地址族 HTTP 出口不同；需要结合 UDP 路由核实。':publicOnes.length?'已取得公网候选。结果只描述本次 ICE 连接，无法覆盖所有应用。':'本次未观测到公网候选；可能受 mDNS、浏览器策略、防火墙或 UDP 路由影响，不能判定不存在泄漏。'};
+    state.rtc.unknown=publicOnes.length===0;
   }catch(error){state.rtc={error:error.message};}finally{state.cancelRTC=null;pc?.close();busy(false);renderRTC();}
 }
 
@@ -264,19 +218,20 @@ function renderNotes(){ $('experience-list').replaceChildren(...EXPERIENCES.map(
 function exportReport() {
   const redact=(record)=>({...record,url:record.url?.replace(/(resource=|\/ip\/)[^&/]+/g,'$1[redacted]'),ip:record.ip?masked(record.ip):undefined,fields:record.fields?.map(([k,v,s])=>[k,s?masked(String(v||'')):v]),data:undefined});
   const lookupReport=state.lookup.map(record=>({...redact(record),url:undefined}));
-  const report={schema:'egress-observatory/v1',exportedAt:new Date().toISOString(),ipMasked:$('mask-ip').checked,scope:'本次浏览器观测；不证明整机路由、账号可用性或安全概率',observedAt:state.observedAt,endpoints:state.endpoints.map(redact),lookupTarget:state.lookupTarget?masked(state.lookupTarget):null,lookup:lookupReport,claude:state.claude.map(redact),webrtc:state.rtc?redact(state.rtc):null,score:getScoreReport({mask:$('mask-ip').checked})};
+  const report={schema:'egress-observatory/v1',exportedAt:new Date().toISOString(),ipMasked:$('mask-ip').checked,scope:'本次浏览器观测；不证明整机路由、账号可用性或安全概率',observedAt:state.observedAt,endpoints:state.endpoints.map(redact),lookupTarget:state.lookupTarget?masked(state.lookupTarget):null,lookup:lookupReport,claude:state.claude.map(redact),webrtc:state.rtc?redact(state.rtc):null,assessment:getAssessmentReport({mask:$('mask-ip').checked})};
   const blob=new Blob([JSON.stringify(report,null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`egress-report-${new Date().toISOString().replace(/[:.]/g,'-')}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);$('run-status').textContent=$('mask-ip').checked?'已导出隐藏 IP 的报告。':'已导出包含完整 IP 的报告。';
 }
 
 $('run-all').addEventListener('click',runEndpoints);
-$('cancel-run').addEventListener('click',()=>{state.controllers.forEach(c=>c.abort());state.cancelRTC?.();$('run-status').textContent='已取消尚未完成的请求。';});
+$('cancel-run').addEventListener('click',()=>{state.controllers.forEach(c=>c.abort());state.cancelRTC?.();cancelAssessment();$('run-status').textContent='已取消尚未完成的请求。';});
 $('run-claude').addEventListener('click',runClaude);
 $('run-webrtc').addEventListener('click',runRTC);
 $('lookup-form').addEventListener('submit',lookup);
-$('mask-ip').addEventListener('change',()=>{renderEndpoints();renderLookup();renderClaude();renderRTC();});
+$('mask-ip').addEventListener('change',()=>{renderEndpoints();renderLookup();renderClaude();renderRTC();renderAssessment();});
 $('export-report').addEventListener('click',exportReport);
 $('source-search').addEventListener('input',renderSources);
 document.querySelectorAll('[data-filter]').forEach(button=>button.addEventListener('click',()=>{state.filter=button.dataset.filter;document.querySelectorAll('[data-filter]').forEach(b=>{b.classList.toggle('active',b===button);b.setAttribute('aria-pressed',String(b===button));});renderSources();}));
-mountScore($('score-panel'));
+initAssessment({request,setBusy:busy,isBusy:()=>state.busy,normalizeIP,masked,cancelRequests:()=>state.controllers.forEach(c=>c.abort())});
 state.endpoints=endpointDefs.map(d=>({...d,idle:true}));
 renderEndpoints();renderSources();renderNotes();browserFacts();route();
+
