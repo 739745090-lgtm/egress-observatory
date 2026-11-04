@@ -1,5 +1,6 @@
-import { PROVIDERS, queryProvider } from './providers.js';
-import { assess } from './assessment.js';
+import { PROVIDERS, queryProvider } from './providers.js?v=1.2';
+import { assess } from './assessment.js?v=1.2';
+import { visualSummary, visualBreakdown } from './visuals.js?v=1.2';
 
 const $=id=>document.getElementById(id);
 const state={records:[],target:null,expected:'',result:null,controller:null,observedAt:null,weights:Object.fromEntries(PROVIDERS.map(p=>[p.id,p.weight]))};
@@ -14,23 +15,7 @@ export function renderAssessment(){
   if(!context || !state.records.length)return;
   state.result=assess(state.records,{weights:state.weights,expectedCountry:state.expected});
   const result=state.result;
-  const score=node('article','assessment-score card');
-  score.append(node('p','eyebrow','WEIGHTED DATABASE EVIDENCE'),node('h3','','综合参考分 · 含类型适配'),node('div','score-number',result.score===null?'—':String(result.score)));
-  score.append(node('span',`badge ${result.provisional?'warn':'ok'}`,result.score===null?'数据不足，暂不评分':result.provisional?'暂定参考 · 保留缺失项':'本轮综合结果'));
-  score.append(node('p','',`指标覆盖率 ${result.coverage}%`));
-  const meter=node('progress');meter.max=100;meter.value=result.coverage;meter.setAttribute('aria-label',`指标覆盖率 ${result.coverage}%`);score.append(meter);
-  score.append(node('p','small muted',`目标 ${context.masked(state.target)} · 已取得 ${state.records.filter(r=>r.status==='success').length} / ${PROVIDERS.length} 个来源`),node('p','small muted','分数由本轮数据库字段自动计算；覆盖率描述已取得的指标，分数不代表 Claude 可用概率。'));
-  const findings=node('article','assessment-findings card');findings.append(node('p','eyebrow','THIS OBSERVATION'),node('h3','','主要发现'));
-  const rows=[['国家加权共识',result.consensus.country || '暂无共识'],['国家支持权重',result.consensus.countrySupport===null?'—':`${result.consensus.countrySupport}%`],['ASN 共识',result.consensus.asn || '暂无共识'],['网络类型',typeLabels[result.consensus.networkType] || '未提供'],['可归属的风险来源',`${result.consensus.riskSourceCount} 个`],['观测时间',formatTime(state.observedAt)]];
-  const dl=node('dl','details');for(const[k,v]of rows){const row=node('div','detail-row');row.append(node('dt','',k),node('dd','',v));dl.append(row);}findings.append(dl);
-  const knownFlags=[...new Set(state.records.filter(r=>r.status==='success').flatMap(r=>Object.entries(r.flags || {}).filter(([,v])=>v===true).map(([k])=>k)))];
-  if(knownFlags.some(f=>['tor','abuser','bogon'].includes(f))){score.classList.add('risk-alert');score.prepend(node('p','callout warn','存在重要风险标签，综合分不能抵消该项证据。'));}
-  const riskFlags=knownFlags.filter(f=>f!=='hosting');
-  findings.append(node('p',riskFlags.length?'callout warn':'callout',riskFlags.length?`匿名或滥用相关标签：${riskFlags.join(' / ')}。各库定义可能不同，见下方逐项结果。`:'已取得的匿名或滥用字段未出现阳性标签；未返回的字段仍为未知。'));
-  if(knownFlags.includes('hosting'))findings.append(node('p','small muted','数据中心标签计入网络类型适配，与匿名或滥用记录分别展示。'));
-  if(result.conflicts.length)findings.append(node('p','callout warn',`存在 ${result.conflicts.length} 项字段分歧：${[...new Set(result.conflicts.map(x=>x.field))].join('、')}。`));
-  $('assessment-summary').replaceChildren(score,findings);
-
+  $('assessment-summary').replaceChildren(visualSummary(state.records,result,{target:state.target,masked:context.masked,observedAt:state.observedAt,total:PROVIDERS.length}));
   const table=node('table','data-matrix');const thead=node('thead');const heading=node('tr');
   ['数据库 / 接口','状态','国家','城市','ASN','网络类型','VPN','Proxy','Tor','Hosting','Abuse','Bogon','请求耗时'].forEach(x=>heading.append(node('th','',x)));thead.append(heading);table.append(thead);
   const tbody=node('tbody');
@@ -38,6 +23,7 @@ export function renderAssessment(){
     const tr=node('tr');const source=node('td');source.append(node('strong','',record.providerName));
     const definition=PROVIDERS.find(p=>p.id===record.providerId);
     source.append(node('small','muted',definition?.kind==='aggregate'?'聚合旁证':definition?.kind==='routing'?'BGP 路由证据':record.providerId==='ipquery'?'分类库；地理上游未命名':'数据库原始接口'));
+    if(['ip2location','dbip'].includes(record.providerId)){const credit=node('a','source-credit',record.providerId==='ip2location'?'IP Geolocation by IP2Location.io':'IP Geolocation by DB-IP');credit.href=definition.attributionUrl;credit.target='_blank';credit.rel='noopener noreferrer';source.append(credit);}
     tr.append(source);
     const status=node('td');status.append(node('span',`badge ${record.status==='success'?'ok':record.status==='pending'?'neutral':'warn'}`,{success:'已返回',pending:'查询中',cancelled:'已取消',error:'未取得'}[record.status]||'待查询'));
     if(record.error){status.title=record.error;status.append(node('small','muted',record.error));}tr.append(status);
@@ -48,18 +34,8 @@ export function renderAssessment(){
   table.append(tbody);$('database-matrix').replaceChildren(table);
   const legend=node('p','matrix-legend','— 表示未提供。阴性“否”来自接口明确的 false；获取失败、聚合旁证和缺失字段分别保留。');$('database-matrix').append(legend);
 
-  const breakdown=node('div','assessment-breakdown');
-  const dims=node('div','result-grid');
-  for(const dim of result.dimensions){const card=node('article','card');card.append(node('p','eyebrow',`维度权重 ${dim.weight}%`),node('h3','',dim.label),node('div','score-number',dim.score===null?'—':String(dim.score)),node('p','small muted',`维度覆盖率 ${dim.coverage}% · ${dim.sourceCount} 个可归属来源`));
-    const detail=node('details');detail.append(node('summary','','字段与来源贡献'));
-    for(const field of dim.fields){const row=node('div','contribution-list');row.append(node('strong','',`${field.label}：${field.score===null?'缺失':field.score+' / 100'}`));for(const src of field.sources)row.append(node('p','small muted',`${src.providerName} / ${src.database}：${valueText(src.value)} · 权重 ${src.weight}`));detail.append(row);}card.append(detail);dims.append(card);}
-  breakdown.append(dims);
-  const methodology=node('article','card score-explanation');methodology.append(node('h3','','融合与去重规则'));result.explanations.forEach(text=>methodology.append(node('p','',text)));breakdown.append(methodology);
-  const attribution=node('article','card score-explanation');attribution.append(node('h3','','本轮数据归属与接口边界'));
-  for(const provider of PROVIDERS){const p=node('p');const a=node('a','source-link',provider.name);a.href=provider.attributionUrl;a.rel='noopener noreferrer';a.target='_blank';p.append(a,document.createTextNode(` · ${provider.attribution} ${provider.description}`));attribution.append(p);}breakdown.append(attribution);
-  $('score-panel').replaceChildren(breakdown);
+  $('score-panel').replaceChildren(visualBreakdown(result,PROVIDERS));
 }
-
 export async function runAssessment(){
   if(context.isBusy())return;
   let target=$('assessment-ip').value.trim();const expected=$('expected-country').value.trim().toUpperCase();
@@ -99,8 +75,16 @@ export function getAssessmentReport({mask=true}={}){
 function exportAssessment(){
   if(!state.result){$('assessment-status').textContent='请先完成一次综合测评。';return;}
   const report={schema:'egress-assessment/v2',exportedAt:new Date().toISOString(),...getAssessmentReport({mask:$('mask-ip').checked})};
-  const url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'}));const a=node('a');a.href=url;a.download=`egress-assessment-${Date.now()}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
-  $('assessment-status').textContent=$('mask-ip').checked?'综合测评报告已导出，目标 IP 已隐藏。':'综合测评报告已导出，包含完整目标 IP。';
+  document.getElementById('report-dialog')?.remove();
+  const json=JSON.stringify(report,null,2);const url=URL.createObjectURL(new Blob([json],{type:'application/json'}));
+  const dialog=node('dialog','report-dialog');dialog.id='report-dialog';dialog.setAttribute('aria-labelledby','report-title');
+  const header=node('div','result-topline');const title=node('h2','','本轮测评报告');title.id='report-title';const close=node('button','secondary','关闭');close.type='button';close.addEventListener('click',()=>dialog.close());header.append(title,close);dialog.append(header);
+  dialog.append(node('p','',`已汇总 ${state.records.filter(r=>r.status==='success').length} 个来源 · 综合分 ${state.result.score??'暂无'} · 指标覆盖 ${state.result.coverage}%`),node('p','small muted',$('mask-ip').checked?'目标 IP 已隐藏。报告包含数据来源、观测时间、字段与计算依据。':'报告包含完整目标 IP、数据来源、观测时间、字段与计算依据。'));
+  const a=node('a','report-download','下载 JSON 报告 ↓');a.href=url;a.download=`egress-assessment-${Date.now()}.json`;dialog.append(a);
+  const detail=node('details');detail.append(node('summary','','查看报告内容'));detail.append(node('pre','',json));dialog.append(detail);
+  dialog.addEventListener('close',()=>{setTimeout(()=>URL.revokeObjectURL(url),1000);dialog.remove();},{once:true});
+  document.body.append(dialog);dialog.showModal();
+  $('assessment-status').textContent=$('mask-ip').checked?'报告已生成，目标 IP 已隐藏。':'报告已生成，包含完整目标 IP。';
 }
 export function initAssessment(options){
   context=options;

@@ -1,5 +1,5 @@
 const DEFAULT_WEIGHTS = Object.freeze({
-  ipinfo: 30, dbip: 20, ipapiis: 25, ipwhois: 15,
+  ipinfo: 30, dbip: 20, ip2location:25, ipapiis: 25, ipwhois: 15,
   freeipapi: 10, ipquery: 20, proxycheck:20, ripe: 0,
 });
 

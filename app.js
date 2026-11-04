@@ -1,10 +1,10 @@
-import { SOURCES, EXPERIENCES } from './data.js';
-import { initAssessment, runAssessment, renderAssessment, cancelAssessment, getAssessmentReport } from './dashboard.js';
+import { SOURCES, EXPERIENCES } from './data.js?v=1.2';
+import { initAssessment, runAssessment, renderAssessment, cancelAssessment, getAssessmentReport } from './dashboard.js?v=1.2';
 
 const $ = (id) => document.getElementById(id);
 const state = { endpoints: [], claude: [], lookup: [], lookupTarget: '', rtc: null, busy: false, controllers: new Set(), filter: 'all', observedAt: null };
 const pages = {
-  overview: ['综合测评', '一次查询，融合多库数据，生成可追溯的质量判断。'],
+  overview: ['看清你的网络身份。', '从出口到风险，让分散的数据变成清晰的判断。'],
   lookup: ['IP 数据对照', '保留来源、时间与分歧，让每个结论都有出处。'],
   score: ['评分依据', '从原始字段到来源贡献，解释每一步计算。'],
   claude: ['Claude 观测', '分别观察网络响应、出口信息与官方服务状态。'],
@@ -234,4 +234,3 @@ document.querySelectorAll('[data-filter]').forEach(button=>button.addEventListen
 initAssessment({request,setBusy:busy,isBusy:()=>state.busy,normalizeIP,masked,cancelRequests:()=>state.controllers.forEach(c=>c.abort())});
 state.endpoints=endpointDefs.map(d=>({...d,idle:true}));
 renderEndpoints();renderSources();renderNotes();browserFacts();route();
-

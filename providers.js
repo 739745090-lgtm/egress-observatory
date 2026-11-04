@@ -1,5 +1,13 @@
-/** Public, keyless adapters. Missing fields remain null. No account secrets are read. */
+/** Browser adapters. Private credentials live only in the backend runtime. */
+const sourceCooldowns=new Map();
 export const PROVIDERS = Object.freeze([
+  {
+    id:'ip2location',name:'IP2Location',database:'IP2Location',kind:'database',weight:25,
+    sourceUrl:'https://www.ip2location.io/ip2location-documentation',fields:['country','city','asn','org','flags.proxy'],qualityFields:['proxy'],
+    description:'本站服务端调用官方 Keyless API，取得实际地理、ASN 与 is_proxy 字段。',
+    limit:'官方免密钥每天 1,000 次；UTC 日重置，本站缓存 600 秒。',cors:'own backend',upstreams:['IP2Location'],
+    attribution:'IP Geolocation by IP2Location.io.',attributionUrl:'https://www.ip2location.io',
+  },
   {
     id:'proxycheck',name:'Proxycheck',database:'Proxycheck',kind:'database',weight:20,
     sourceUrl:'https://proxycheck.io/api/',fields:['country','city','asn','org','networkType','flags.vpn','flags.proxy','flags.tor','flags.hosting'],qualityFields:['vpn','proxy','tor','hosting'],
@@ -46,9 +54,9 @@ export const PROVIDERS = Object.freeze([
   {
     id: 'dbip', name: 'DB-IP', database: 'DB-IP', kind: 'database', weight: 20,
     sourceUrl: 'https://db-ip.com/api/free', fields: ['country', 'city'], qualityFields: [],
-    description: 'DB-IP 官方免费地理库；当前浏览器请求仅允许查询访问者 IP，其他目标会明确返回 RESTRICTED。',
-    limit: '免费 500 次/日；HTTPS 实际响应有 CORS，浏览器目标限制以接口结果为准。', cors: '*',
-    visitorOnly: true, upstreams: ['DB-IP'],
+    description: '本站服务端调用 DB-IP 官方免费地理 API，按实际目标取得国家与城市。',
+    limit: '免费 500 次/日；本站缓存 600 秒，额度耗尽时保留缺失。', cors: 'own backend',
+    upstreams: ['DB-IP'],
     attribution: 'IP Geolocation by DB-IP。', attributionUrl: 'https://db-ip.com/',
   },
   {
@@ -154,11 +162,12 @@ function requestURL(id, ip) {
   const target = encodeURIComponent(ip);
   switch (id) {
     case 'proxycheck': return `https://egress-observatory-api.reaper-f.chatgpt.site/v1/proxycheck?ip=${target}`;
+    case 'ip2location': return `https://egress-observatory-api.reaper-f.chatgpt.site/v1/ip2location?ip=${target}`;
     case 'ipinfo': return `https://ipinfo.io/${target}/json`;
     case 'ipquery': return `https://api.ipquery.io/${target}?format=json`;
     case 'ipapiis': return `https://api.ipapi.is/?q=${target}`;
     case 'ipwhois': return `https://ipwho.is/${target}`;
-    case 'dbip': return `https://api.db-ip.com/v2/free/${target}`;
+    case 'dbip': return `https://egress-observatory-api.reaper-f.chatgpt.site/v1/dbip?ip=${target}`;
     case 'freeipapi': return `https://free.freeipapi.com/api/v1/json/${target}`;
     case 'ripe': return `https://stat.ripe.net/data/network-info/data.json?resource=${target}&sourceapp=egress-observatory`;
     default: return null;
@@ -181,8 +190,8 @@ function assertProviderResponse(id, data) {
 function normalize(id, data, targetIP) {
   const record = { country: null, city: null, asn: null, org: null, networkType: null, flags: blankFlags(), fieldSources: { flags: {} }, raw: {} };
   let responseIP;
-  if (id === 'proxycheck') {
-    if(data.providerId!=='proxycheck'||data.status!=='success')throw new ProviderError('invalid-response','服务端未返回可用的授权查询结果。');
+  if (['proxycheck','dbip','ip2location'].includes(id)) {
+    if(data.providerId!==id||data.status!=='success')throw new ProviderError('invalid-response','服务端未返回可用的数据库查询结果。');
     responseIP=data.ip;
     record.country=countryCode(data.country);record.city=cleanText(data.city);record.asn=asn(data.asn);record.org=cleanText(data.org);
     record.networkType=['residential','isp','mobile','business','hosting'].includes(data.networkType)?data.networkType:null;
@@ -275,6 +284,7 @@ export async function queryProvider(id, ip, { signal } = {}) {
     upstreams: provider?.upstreams || [], fieldSources: { flags: {} },
   };
   if (!provider || !targetIP) return { ...base, errorCode: !provider ? 'unknown-provider' : 'invalid-ip', error: !provider ? '未知数据提供方。' : '请提供完整 IPv4 或 IPv6 地址。' };
+  if((sourceCooldowns.get(id)||0)>Date.now())return {...base,errorCode:'rate-limit-cooldown',error:'来源仍在上次限流的等待期，本轮未重复请求。'};
   if (signal?.aborted) return { ...base, status: 'cancelled', errorCode: 'cancelled', error: '查询已取消。' };
   const controller = new AbortController();
   let timedOut = false;
@@ -289,6 +299,7 @@ export async function queryProvider(id, ip, { signal } = {}) {
       const retryAfter = response.headers.get('Retry-After');
       const numericRetry = retryAfter && /^\d+$/.test(retryAfter) ? Number(retryAfter) : null;
       if (response.status === 429) {
+        sourceCooldowns.set(id,Date.now()+Math.max(60,numericRetry||60)*1000);
         const failure = new ProviderError('rate-limit', '接口额度或速率受限，已停止本来源请求，请等待提供方重置。');
         failure.retryAfterSeconds = numericRetry;
         throw failure;

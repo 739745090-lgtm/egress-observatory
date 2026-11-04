@@ -49,11 +49,11 @@ export const SOURCES = [
     evidence: '2026-10-26 据此实施过客户端配置；当轮外部 DNS / WebRTC 泄漏检测与生产断网行为未观察。', date: '2026-10-26',
   },
   {
-    id: 'ip2location', name: 'IP2Location', url: 'https://www.ip2location.com/', category: 'database',
-    tags: ['历史结果引用', '地理位置', '数据库'],
-    description: '在历史 IPPure、ip.cx 页面及定位对比记录中出现，属于位置结论的来源之一。',
-    access: '独立数据库/API 提供方；本项目未配置其授权或密钥，本站不直接查询其数据库。',
-    evidence: '2026-10-24 的位置对比明确记录该来源；不能由第三方网页展示推定已取得再分发授权。', date: '2026-10-24',
+    id: 'ip2location', name: 'IP2Location', url: 'https://www.ip2location.io', category: 'database',
+    tags: ['历史结果引用', '官方 Keyless API', '服务端查询'],
+    description: '九源流程通过本方服务端调用 IP2Location 官方 Keyless API，使用实际位置、ASN 与 is_proxy 字段，默认相对权重 25。',
+    access: '本站 /v1/ip2location?ip={IP}；官方免密钥每日 1,000 次，成功结果缓存 600 秒。IP Geolocation by IP2Location.io。',
+    evidence: '2026-11-05 正式托管入口返回 429 upstream-rate-limit；当前受免费额度或频率限制，保持缺失，等待额度恢复。', date: '2026-11-05',
   },
   {
     id: 'ipinfo', name: 'IPinfo', url: 'https://ipinfo.io/', category: 'database',
@@ -64,10 +64,10 @@ export const SOURCES = [
   },
   {
     id: 'dbip', name: 'DB-IP', url: 'https://db-ip.com/', category: 'database',
-    tags: ['历史结果引用', '官方原始 API', '访问者限制'],
-    description: '历史多库定位中的来源；v1.1 直接请求 DB-IP 官方免费地理接口，保留 IP Geolocation by DB-IP 署名。',
-    access: 'GET https://api.db-ip.com/v2/free/{IP}，免费每日 500 次。当前浏览器请求仅允许查询该服务看到的访问者 IP；其他目标返回 RESTRICTED 时保持受限。',
-    evidence: '2026-10-24 有历史定位引用；2026-11-05 新增官方接口。FreeIPAPI 中包含 DB-IP 的聚合字段仍单列旁证，避免重复计权。', date: '2026-11-05',
+    tags: ['历史结果引用', '官方原始 API', '服务端查询'],
+    description: '通过本站服务端查询 DB-IP 官方免费地理 API，使用指定目标的国家与城市，保留 IP Geolocation by DB-IP 署名。',
+    access: '本站 /v1/dbip?ip={IP} 使用官方服务端查询方式；免费每日 500 次，成功结果缓存 600 秒，额度耗尽或错误保持缺失。',
+    evidence: '2026-11-05 正式托管入口返回 429 upstream-daily-quota；共享服务端出口的免费日额度已用尽，保持缺失。FreeIPAPI 仍单列旁证。', date: '2026-11-05',
   },
   {
     id: 'ipquery', name: 'IPQuery', url: 'https://ipquery.io/sources', category: 'database',
@@ -101,7 +101,7 @@ export const SOURCES = [
     id: 'cloudflare-trace', name: 'Cloudflare · Trace', url: 'https://www.cloudflare.com/cdn-cgi/trace', category: 'diagnostic',
     tags: ['历史实测', '请求出口', '接入机房'],
     description: '提供请求出口、国家标签和 Cloudflare 接入机房等信息。colo 表示本次请求接入节点。',
-    access: '当前浏览器出口观测中按需请求；结果取决于访问路径。接入机房单独展示，不参与八源质量评分。',
+    access: '当前浏览器出口观测中按需请求；结果取决于访问路径。接入机房单独展示，不参与九源质量评分。',
     evidence: '2026-10-24 至 10-25 保存过 loc、colo 与 Cloudflare 连通结果；不同请求路径出现过不同接入节点。', date: '2026-10-25',
   },
   {
@@ -200,20 +200,20 @@ export const SOURCES = [
     tags: ['v1.1 自动查询', '公开 API', '地理 / ASN'],
     description: '接口提供地理与网络归属，按 ipwho.is 自有库保留来源；免费层 Security Data 不在当前返回范围。',
     access: '免 key、支持 CORS；当前每日 1,000 次，浏览器请求由整个来源域名共享额度。安全字段缺失保持 null。',
-    evidence: '2026-11-05 纳入八源自动查询；有实际返回的同字段才按该库权重计入，未把地理记录补成风险结论。', date: '2026-11-05',
+    evidence: '2026-11-05 纳入九源自动查询；有实际返回的同字段才按该库权重计入，未把地理记录补成风险结论。', date: '2026-11-05',
   },
   {
     id: 'freeipapi', name: 'FreeIPAPI', url: 'https://freeipapi.com/data-sources', category: 'api',
     tags: ['v1.1 自动查询', '聚合旁证', '来源包含 DB-IP'],
     description: '官方来源包含 DB-IP（CC BY 4.0），逐字段来源和其他上游未完整披露。地理与 isProxy 保留旁证，不作为额外独立库投票。',
     access: '免费 GET https://free.freeipapi.com/api/v1/json/{IP}，无需账户或 key；每 10 秒 10 次、每分钟最多 60 次，浏览器请求按访客出口计量。',
-    evidence: '2026-11-05 纳入八源自动查询，聚合来源不计质量分；代理标记不能直接归因于 DB-IP。', date: '2026-11-05',
+    evidence: '2026-11-05 纳入九源自动查询，聚合来源不计质量分；代理标记不能直接归因于 DB-IP。', date: '2026-11-05',
   },
   {
     id: 'ippure-myip', name: 'IPPure · MyIP-Info API', url: 'https://ippure.com/MyIP-Info-API', category: 'api',
     tags: ['本次新增接入', 'Beta API', '当前出口'],
     description: '提供当前请求出口相关信息。本站曾有历史网页检测记录，该 API 的接入属于本次新增。',
-    access: '官方公开 Beta 当前出口接口，独立展示站方分数；未纳入八源自动测评，不当作任意目标 IP 的查询接口。',
+    access: '官方公开 Beta 当前出口接口，独立展示站方分数；未纳入九源自动测评，不当作任意目标 IP 的查询接口。',
     evidence: '历史记录证明使用过 IPPure 网页；没有证据证明过去使用过这个 API。', date: '2026-11-04',
   },
   {
@@ -221,12 +221,12 @@ export const SOURCES = [
     tags: ['v1.1 自动查询', '路由证据', '不计风险分'],
     description: '公开网络观测接口，用于补充地址前缀、ASN 和路由信息；不生成 Claude 风控结论。',
     access: '官方公开 Data API；校验查询目标属于返回公告前缀，路由快照单独呈现，来源权重为 0。',
-    evidence: '2026-11-05 纳入八源自动查询的路由维度；未将 ASN 公告推导成住宅或隐私风险结论。', date: '2026-11-05',
+    evidence: '2026-11-05 纳入九源自动查询的路由维度；未将 ASN 公告推导成住宅或隐私风险结论。', date: '2026-11-05',
   },
   {
     id: 'proxycheck', name: 'Proxycheck', url: 'https://proxycheck.io/', category: 'database',
     tags: ['本方授权', '服务端查询', 'v1.1 自动查询'],
-    description: '第八个自动来源，提供明确返回的 VPN、Proxy、Tor、Hosting 和网络归属字段。通过本方 Sites 服务查询，前端保留原始来源归属。',
+    description: '九源流程中的授权数据源，提供明确返回的 VPN、Proxy、Tor、Hosting 和网络归属字段。通过本方 Sites 服务查询，前端保留原始来源归属。',
     access: '公开只读 API：egress-observatory-api.reaper-f.chatgpt.site/v1/proxycheck。成功结果缓存 600 秒，同一 isolate 内每调用者每分钟 10 次；密钥只在 Sites 运行时 secret 中。',
     evidence: '2026-11-05 已获本方授权，服务端真实查询返回 HTTP 200 成功记录；授权凭据未写入仓库或 GitHub Pages 前端。', date: '2026-11-05',
   },
@@ -242,7 +242,7 @@ export const SOURCES = [
 export const EXPERIENCES = [
   {
     title: '自动融合只使用本轮真实字段',
-    body: '开始综合测评后，八个来源查询同一目标，实际返回的字段自动进入矩阵与评估。IPinfo 的地理和 ASN 不会补成风险分；IPQuery 分类、ipapi.is Bogon 等字段按真实可用范围参与，限流、受限和未知值分别保留。',
+    body: '开始综合测评后，九个来源查询同一目标，实际字段自动形成环形参考分、风险信号格和位置对照；原始字段表可展开追溯。IPinfo 的地理和 ASN 不会补成风险分，各来源按真实返回范围参与，限流、受限和未知值分别保留。',
     sourceUrl: 'https://support.ipinfo.io/hc/en-us/articles/34121895556242-Legacy-Free-API-vs-IPinfo-Lite',
   },
   {
