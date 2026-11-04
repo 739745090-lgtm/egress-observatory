@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="对照浏览器出口、IP 数据来源与 Claude 连接现象。按需运行，保留证据与不确定性。">
+  <meta name="theme-color" content="#f5f4f0">
+  <meta name="referrer" content="no-referrer">
+  <title>EGRESS · 出口观测站</title>
+  <link rel="icon" href="./favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./styles.css">
+  <script type="module" src="./app.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">跳到内容</a>
+  <aside class="sidebar">
+    <a class="brand" href="#overview" aria-label="EGRESS 出口观测站首页">
+      <svg class="brand-mark" viewBox="0 0 40 40" aria-hidden="true"><path d="M5 14V5h9M26 5h9v9M35 26v9h-9M14 35H5v-9"/><circle cx="20" cy="20" r="7"/><path d="M20 9v5M20 26v5M9 20h5M26 20h5"/></svg>
+      <span><strong>EGRESS<span class="brand-dot">.</span></strong><small>出口观测站</small></span>
+    </a>
+    <div class="nav-label">工作台 <span>WORKSPACE</span></div>
+    <nav aria-label="主导航">
+      <a class="active" href="#overview" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg><span>网络总览</span><span class="nav-number">01</span></a>
+      <a href="#lookup"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="m15 15 6 6M7 10h6M10 7v6"/></svg><span>IP 数据对照</span><span class="nav-number">02</span></a>
+      <a href="#score"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h16M6 16V9M12 16V4M18 16v-5"/></svg><span>综合评分</span><span class="nav-number">03</span></a>
+      <a href="#claude"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 15h3l3-9 4 13 3-9h3M3 4h18M3 22h18"/></svg><span>Claude 观测</span><span class="nav-number">04</span></a>
+      <a href="#sources"><svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 4 16 4 16 0V5M4 12c0 4 16 4 16 0"/></svg><span>来源目录</span><span class="nav-number">05</span></a>
+      <a href="#notes"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h14v18H5zM9 7h6M9 12h6M9 17h3"/></svg><span>观测笔记</span><span class="nav-number">06</span></a>
+    </nav>
+    <div class="sidebar-bottom"><div class="sidebar-signal"><span></span> 按需运行 · 保留证据</div><p>每个结论，都应有一个来源。</p><a href="https://github.com/BlackSlience-Reaper/egress-observatory" target="_blank" rel="noopener noreferrer">GitHub 源码 <span aria-hidden="true">↗</span></a></div>
+  </aside>
+  <div class="workspace">
+    <header class="topbar"><div class="breadcrumb">EGRESS <span>/</span> NETWORK OBSERVATORY</div><div class="topbar-meta"><span class="open-source-dot"></span> OPEN SOURCE <span class="version">v1.0</span></div></header>
+    <main id="main">
+      <div class="page-heading"><div><p class="eyebrow">YOUR NETWORK, IN CONTEXT</p><h1 id="page-title">网络总览</h1><p id="page-subtitle">把出口、连接与数据来源放在一起，读懂当前网络。</p></div><div class="heading-stamp" aria-hidden="true"><span>OBSERVE</span><span>COMPARE</span><span>UNDERSTAND ↗</span></div></div>
+      <section id="overview" class="view" aria-label="网络总览">
+        <div class="observation-banner"><div><span class="eyebrow">BROWSER OBSERVATION</span><h2>从当前浏览器，<br class="mobile-break">观察真实出口。</h2><p>对照不同目标看到的地址，记录分流与连接现象。</p></div><div class="banner-decoration" aria-hidden="true"><div class="orbit orbit-one"></div><div class="orbit orbit-two"></div><div class="orbit orbit-three"></div><span class="orbit-center"></span><span class="orbit-point"></span><span class="orbit-label">HTTP / IPv4 / IPv6</span></div></div>
+        <div class="toolbar"><div class="action-group"><button id="run-all" type="button"><span aria-hidden="true">↗</span> 开始网络观测</button><button id="cancel-run" class="secondary" type="button" disabled>停止</button></div><div class="action-group toolbar-secondary"><label class="mask-control"><input id="mask-ip" type="checkbox" checked> 隐藏 IP</label><button id="export-report" class="secondary" type="button">导出报告 <span aria-hidden="true">↓</span></button></div></div>
+        <div class="run-line"><span id="run-status" role="status" aria-live="polite">等待开始。页面不会自动发起检测请求。</span><span>观测时间 <time id="observed-at">—</time></span></div>
+        <div class="metrics-grid">
+          <div class="metric"><span class="metric-label">当前 IPv4 <span>01</span></span><div id="summary-ip" class="metric-value mono">待观测</div><p>浏览器访问所见出口</p></div>
+          <div class="metric"><span class="metric-label">出口一致性 <span>02</span></span><div id="summary-route" class="metric-value">待对照</div><p>按目标逐项保留结果</p></div>
+          <div class="metric"><span class="metric-label">Claude 网络 <span>03</span></span><div id="summary-claude" class="metric-value">待观测</div><p>连接现象与官方服务状态</p></div>
+          <div class="metric"><span class="metric-label">数据来源 <span>04</span></span><div id="summary-sources" class="metric-value">来源目录</div><p>逐个来源，保留出处</p></div>
+        </div>
+        <div class="section-header"><div><p class="eyebrow">01 / EXIT POINTS</p><h2>各目标所见出口</h2></div><span class="section-note">单次观测 · 无后台轮询</span></div>
+        <p class="section-intro">点击观测后，浏览器将请求 ipify、Cloudflare 与 IPPure。每个目标可能受不同代理规则影响，结果仅覆盖本次浏览器请求。</p>
+        <section id="endpoint-grid" class="result-grid" aria-label="出口检测结果"><div class="empty"><span class="empty-symbol" aria-hidden="true">◎</span><h3>等待第一份观测</h3><p>开始后将在这里显示各目标的地址、响应耗时和状态。</p></div></section>
+        <div id="route-note" class="callout">出口一致性需要多个有效样本；当前尚无观测结果。</div>
+        <div class="lower-grid"><section class="card browser-panel"><div class="section-header compact"><div><p class="eyebrow">02 / LOCAL CONTEXT</p><h2>浏览器环境</h2></div><span class="badge neutral">本地读取</span></div><div id="browser-facts" class="details"></div><p class="small muted">时区、语言等信息只作为环境线索，不参与综合评分。</p></section><section class="card webrtc-panel"><div class="section-header compact"><div><p class="eyebrow">03 / OPTIONAL</p><h2>WebRTC 观察</h2></div></div><p class="muted">运行时会联系 Google STUN，查看浏览器暴露的候选地址。不会请求摄像头或麦克风；结果受浏览器隐私策略与网络设置影响。</p><button id="run-webrtc" class="secondary" type="button">运行 WebRTC 观察 <span aria-hidden="true">↗</span></button><div id="webrtc-result" class="small muted" role="status" aria-live="polite">尚未运行。</div></section></div>
+      </section>
+      <section id="lookup" class="view" aria-label="IP 数据对照" hidden>
+        <div class="section-header"><div><p class="eyebrow">COMPARE THE SOURCES</p><h2>同一个地址，多份来源记录。</h2></div><span class="badge neutral">IP 数据库</span></div>
+        <p class="section-intro">分别查看归属地、网络与 ASN 信息。城市、运营商或代理标签存在分歧时，保留各来源的原始结论。</p>
+        <form id="lookup-form" class="lookup-form card"><label for="ip-input">IP 地址 <span class="muted">IPv4 / IPv6，留空查询当前出口</span></label><div class="input-action"><input id="ip-input" type="text" placeholder="输入公网 IP 地址，或留空" autocomplete="off" spellcheck="false" autocapitalize="off"><button id="lookup-submit" type="submit">查询与对照 <span aria-hidden="true">↗</span></button></div><p class="small muted">查询时，目标 IP 将发送给对应数据服务。请求路径由你的浏览器和代理配置决定。</p></form>
+        <div id="lookup-status" class="run-line" role="status" aria-live="polite">等待查询。</div>
+        <div id="lookup-results" class="result-grid"><div class="empty"><span class="empty-symbol" aria-hidden="true">⌕</span><h3>让来源并排说话</h3><p>查询结果会分别注明数据服务及查询状态。</p></div></div>
+      </section>
+      <section id="score" class="view" aria-label="综合评分" hidden>
+        <div class="section-header"><div><p class="eyebrow">WEIGHTED ASSESSMENT</p><h2>把多库证据，放进同一张量尺。</h2></div><span class="badge neutral">权重可调整</span></div>
+        <p class="section-intro">来源权重可调整；未提供的数据保持缺失，覆盖率单独计算。IPinfo 数据库的默认权重略高，各项依据与评分规则保留可见。</p>
+        <div id="score-panel"></div>
+      </section>
+      <section id="claude" class="view" aria-label="Claude 观测" hidden>
+        <div class="section-header"><div><p class="eyebrow">CLAUDE CONNECTIVITY</p><h2>拆开观察，才能定位问题。</h2></div><span class="badge neutral">公开网络信号</span></div>
+        <p class="section-intro">分别观察目标请求与官方服务状态。浏览器可读性、网络连接、地区支持和账户权限各有自己的证据。</p>
+        <div class="claude-intro card"><div class="claude-monogram" aria-hidden="true">✳</div><div><h3>从连接现象开始</h3><p>浏览器跨域限制可能让响应内容不可读。HTTP opaque 响应无法用于判定服务解锁或账户可用。</p></div><button id="run-claude" type="button">开始 Claude 观测 <span aria-hidden="true">↗</span></button></div>
+        <div id="claude-note" class="callout">观测不会提交账户信息或调用付费模型。实际对话仍需在 Claude 中确认。</div>
+        <div id="claude-results" class="result-grid"><div class="empty"><span class="empty-symbol" aria-hidden="true">⌁</span><h3>尚未发起连接观测</h3><p>运行后逐项记录公开端点的响应现象。</p></div></div>
+        <div class="section-header"><div><p class="eyebrow">OFFICIAL REFERENCE</p><h2>回到官方入口</h2></div></div>
+        <div class="reference-links"><a href="https://status.claude.com/" target="_blank" rel="noopener noreferrer"><span>官方服务状态<small>查看全局故障与维护信息</small></span><span>↗</span></a><a href="https://claude.ai/" target="_blank" rel="noopener noreferrer"><span>Claude 网页<small>确认实际登录与对话行为</small></span><span>↗</span></a><a href="https://www.anthropic.com/supported-countries" target="_blank" rel="noopener noreferrer"><span>官方支持地区<small>以当前官方说明为准</small></span><span>↗</span></a></div>
+      </section>
+      <section id="sources" class="view" aria-label="来源目录" hidden>
+        <div class="section-header"><div><p class="eyebrow">SOURCE DIRECTORY</p><h2>每条线索，都能追溯。</h2></div><span id="source-count" class="badge neutral">正在整理来源</span></div>
+        <p class="section-intro">收录历史使用过的检测站与相关数据服务，区分自动接口、人工查询和数据库来源。</p>
+        <div class="source-tools"><label class="search-field"><span aria-hidden="true">⌕</span><input id="source-search" type="search" placeholder="搜索网站、数据库或用途" aria-label="搜索来源" autocomplete="off"></label><div id="source-filters" class="filters" aria-label="来源分类"><button class="filter active" data-filter="all" type="button">全部</button><button class="filter" data-filter="history" type="button">历史使用</button><button class="filter" data-filter="api" type="button">自动接口</button><button class="filter" data-filter="database" type="button">数据库</button><button class="filter" data-filter="diagnostic" type="button">专项检测</button></div></div>
+        <div id="source-grid" class="source-grid"></div>
+      </section>
+      <section id="notes" class="view" aria-label="观测笔记" hidden>
+        <div class="section-header"><div><p class="eyebrow">FIELD NOTES</p><h2>把经验，变成可复用的判断。</h2></div><span class="badge neutral">方法与边界</span></div>
+        <p class="section-intro">来自实际配置与排查中的观察。每次改变网络环境后，都需要重新观察当前行为。</p>
+        <div id="experience-list" class="experience-list"></div>
+        <section class="privacy-panel card"><p class="eyebrow">PRIVACY & SCOPE</p><h2>数据如何流动</h2><div class="privacy-grid"><div><h3>由你启动</h3><p>点击检测按钮后才会请求第三方服务；页面不使用账号系统或分析追踪。IP 查询会把目标地址发送给对应来源。</p></div><div><h3>报告留在本地</h3><p>导出的报告由浏览器生成，默认隐藏 IP。GitHub Pages 与被查询的数据服务各自处理访问日志；本站无自建收集端。</p></div><div><h3>以实际路径为准</h3><p>静态网页无法强制 DIRECT 或指定代理，浏览器结果也无法证明整台设备的路由行为。</p></div></div></section>
+      </section>
+      <footer class="footer"><span><strong>EGRESS.</strong> <span>出口观测站</span></span><span>观测记录只描述测量范围，数据不代表安全承诺。</span><a href="https://github.com/BlackSlience-Reaper/egress-observatory" target="_blank" rel="noopener noreferrer">v1.0 · GitHub ↗</a></footer>
+    </main>
+  </div>
+</body>
+</html>
