@@ -10,7 +10,7 @@
   <title>IP 纯净度检测 · Egress</title>
   <link rel="icon" href="./favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="./styles.css?v=2.9">
-  <script type="module" src="./src/main.js?v=4.22"></script>
+  <script type="module" src="./src/main.js?v=4.23"></script>
 </head>
 <body>
   <a class="skip-link" href="#main">跳到检测结果</a>
@@ -59,6 +59,7 @@
           <button type="submit" class="accent">查询</button>
           <button type="button" id="self-check" class="ghost self-check" title="重新识别本机当前的出口 IP 并检测（含连接实测）"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.5"/><circle cx="8" cy="8" r="1.6"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2"/></svg>测本机出口</button>
         </form>
+        <div id="ip-history" class="ip-history" aria-label="最近查询的 IP"></div>
         <p id="status" class="status" role="status" aria-live="polite">正在识别你的出口 IP…</p>
 
         <h2 class="section-title">检测结论</h2>

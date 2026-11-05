@@ -1,6 +1,6 @@
 /** DOM rendering. All external text goes through esc(). */
 import { esc, countryName, maskIP, maskText, formatOffset, zoneOffset } from './util.js?v=4.1';
-import { SOURCES } from './sources.js?v=3.2';
+import { SOURCES } from './sources.js?v=3.3';
 import { DNSBLS, CIDR_LISTS } from './blocklists.js';
 import { CATEGORIES, TYPE_LABEL } from './score.js?v=4.7';
 import { captchaConfig } from './captcha.js';
@@ -649,6 +649,11 @@ export function crossLinks(ip) {
     ['VirusTotal', `https://www.virustotal.com/gui/ip-address/${ip}`], ['Net.Coffee', `https://ip.net.coffee/ip/${ip}`],
   ];
   $('crosslinks').innerHTML = links.map(([name, url]) => `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(name)} ↗</a>`).join('');
+}
+
+/** Up to six recently queried addresses, newest first; clicking one checks it again. Masked like every other address. */
+export function renderHistory(list) {
+  $('ip-history').innerHTML = list.length ? '最近查询 ' + list.map(ip => `<button type="button" class="chip-btn" data-check="${esc(ip)}">${ipSpan(ip, masked)}</button>`).join('') + '<button type="button" class="chip-btn clear" data-clear-history>清除</button>' : '';
 }
 
 export function applyMask(on) {

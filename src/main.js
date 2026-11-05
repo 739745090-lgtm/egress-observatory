@@ -6,13 +6,13 @@ import { setupProviderImport, readProviderReport, mergeProviderPage, lookupChrom
 import { API_BASE, PAGE_LOOKUP_CLOUD } from '../config.js?v=cloud2';
 import { lookupPage } from './page-lookups.js?v=5';
 import { getJSON, parseIP, isPublicIP, sameIP, maskIP, maskText } from './util.js?v=4.1';
-import { SOURCES, runSource } from './sources.js?v=3.2';
+import { SOURCES, runSource } from './sources.js?v=3.3';
 import { DNSBLS, checkDNSBL, CIDR_LISTS, checkCIDRList, asnAbuseDensity } from './blocklists.js';
 import { fetchASN, inferASN, detectLease } from './asn.js?v=4.3';
 import { detectEgress, summarizeEgress, probeWebRTC, probeDNS, classifyDNS, probeTCP, probeEnvironment, probeIPv6, classifyIPv6, traceProbe } from './probes.js';
 import { runTurnstile, runRecaptcha } from './captcha.js?v=4.2';
 import { score } from './score.js?v=4.7';
-import * as view from './render.js?v=4.15';
+import * as view from './render.js?v=4.16';
 
 const $ = id => document.getElementById(id);
 const app = {
@@ -167,9 +167,22 @@ function scheduleRender() {
 
 // ---------- a single check ----------
 
+// The last six addresses checked in this browser, newest first. Kept only in localStorage.
+const HISTORY = 'egress-history';
+function readHistory() {
+  try { const list = JSON.parse(localStorage.getItem(HISTORY)); return Array.isArray(list) ? list.map(ip => parseIP(ip)?.ip).filter(ip => ip && isPublicIP(ip)).slice(0, 6) : []; }
+  catch { return []; }
+}
+function rememberIP(ip) {
+  const list = [ip, ...readHistory().filter(item => !sameIP(item, ip))].slice(0, 6);
+  try { localStorage.setItem(HISTORY, JSON.stringify(list)); } catch { /* Storage disabled: history stays empty. */ }
+  view.renderHistory(list);
+}
+
 async function startRun(input, fetchPages = true) {
   const parsed = parseIP(input);
   if (!parsed || !isPublicIP(parsed.ip)) { $('status').textContent = '请输入有效的公网 IPv4 或 IPv6 地址。'; return; }
+  rememberIP(parsed.ip);
   const healthReady = refreshHealth(true);
   app.run?.controller.abort();
   const controller = new AbortController();
@@ -457,6 +470,7 @@ document.addEventListener('click', event => {
   const check = event.target.closest('[data-check]');
   if (check) { startRun(check.dataset.check); window.scrollTo({ top: 0, behavior: 'smooth' }); }
   if (event.target.closest('[data-self-check]')) $('self-check').click();
+  if (event.target.closest('[data-clear-history]')) { localStorage.removeItem(HISTORY); view.renderHistory([]); }
   const rerun = event.target.closest('[data-rerun]');
   if (rerun && app.run) runCaptcha(app.run, rerun.dataset.rerun, undefined, true);
 });
@@ -539,6 +553,7 @@ $('provider-apply').addEventListener('click', () => {
 const requested = new URLSearchParams(location.search).get('ip');
 view.initTooltips();
 view.applyMask(app.masked);
+view.renderHistory(readHistory());
 view.renderEgress(null, null, app);
 refreshEgress({ autoStart: !requested });
 if (requested) startRun(requested);

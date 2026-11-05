@@ -38,6 +38,11 @@ function workerRecord(data, ip) {
     flags: flags(Object.fromEntries(Object.entries(data.flags || {}).map(([key, value]) => [key, bool(value)]))),
     risk: num(data.risk), hostname: text(data.hostname), cacheHit: data.cacheHit === true,
   };
+  // The API worker answers from its 24-hour copy when the upstream refuses (quota, rate limit, outage).
+  if (data.stale) {
+    const observed = Date.parse(data.observedAt);
+    out.sourceNote = `云端缓存，${Number.isFinite(observed) ? copyAge(observed) + '前' : '近期'}观测；本次上游：${text(data.staleReason) || '不可用'}`;
+  }
   if (data.devices) out.devices = { address: num(data.devices.address), subnet: num(data.devices.subnet) };
   if (data.lastSeen) out.lastSeen = text(data.lastSeen);
   for (const key of EXTRA_KEYS) {
@@ -97,7 +102,7 @@ export const SOURCES = [
     run: worker('dbip'),
   },
   {
-    id: 'abuseipdb', name: 'AbuseIPDB', group: 'threat', site: ip => `https://www.abuseipdb.com/check/${ip}`, optional: true,
+    id: 'abuseipdb', name: 'AbuseIPDB', group: 'threat', site: ip => `https://www.abuseipdb.com/check/${ip}`, optional: true, quota: true,
     async run(ip, ctx) {
       const health = await ctx.healthReady;
       if (!health?.routes?.includes('abuseipdb')) { const error = new Error('未配置密钥'); error.skip = true; throw error; }
@@ -106,7 +111,7 @@ export const SOURCES = [
       record.reports = num(data.reports); record.lastReported = text(data.lastReported);
       record.rawUsageType = text(data.usageType);
       record.type = record.usageType;
-      record.sourceNote = '国家、ISP 和使用类型来自 IPinfo；举报记录和滥用置信分来自 AbuseIPDB。';
+      record.sourceNote = [record.sourceNote, '国家、ISP 和使用类型来自 IPinfo；举报记录和滥用置信分来自 AbuseIPDB。'].filter(Boolean).join(' · ');
       if (data.block) record.block = { prefix: text(data.block.prefix), reported: num(data.block.reported) || 0, maxScore: num(data.block.maxScore) };
       return record;
     },
@@ -146,7 +151,7 @@ export const SOURCES = [
     },
   },
   {
-    id: 'ipapiis', name: 'ipapi.is', group: 'intel', site: ip => `https://ipapi.is/?q=${ip}`,
+    id: 'ipapiis', name: 'ipapi.is', group: 'intel', site: ip => `https://ipapi.is/?q=${ip}`, quota: true,
     async run(ip, ctx) {
       const health = await ctx.healthReady;
       if (health?.routes?.includes('ipapiis')) {
@@ -194,7 +199,7 @@ export const SOURCES = [
     },
   },
   {
-    id: 'ipwhois', name: 'ipwho.is', group: 'intel', site: ip => `https://ipwho.is/${ip}`,
+    id: 'ipwhois', name: 'ipwho.is', group: 'intel', site: ip => `https://ipwho.is/${ip}`, quota: true,
     async run(ip, ctx) {
       const { data } = await json(`https://ipwho.is/${encodeURIComponent(ip)}`, ctx);
       if (data.success === false) fail(text(data.message) || '拒绝查询');
@@ -282,7 +287,7 @@ export const SOURCES = [
     },
   },
   {
-    id: 'iplocate', name: 'IPLocate', group: 'intel', site: ip => `https://www.iplocate.io/lookup/${ip}`,
+    id: 'iplocate', name: 'IPLocate', group: 'intel', site: ip => `https://www.iplocate.io/lookup/${ip}`, quota: true,
     async run(ip, ctx) {
       const { data } = await json(`https://www.iplocate.io/api/lookup/${encodeURIComponent(ip)}`, ctx);
       if (data.error) fail(text(data.error) || '拒绝查询');
@@ -556,14 +561,48 @@ export function classifyHostname(hostname) {
   return base;
 }
 
+// Answers are kept in this browser per source and IP. Sources with a tight per-IP or shared daily quota answer from
+// a copy under 6 hours old without asking again; any source that fails falls back to its copy from the last 24 hours.
+const COPY = 'egress-src:';
+const FRESH_MS = 6 * 3600e3;
+const STALE_MS = 24 * 3600e3;
+
+export function readCopy(kind, ip) {
+  try {
+    const row = JSON.parse(localStorage.getItem(COPY + kind + ':' + ip));
+    return row && Number.isFinite(row.time) && Date.now() - row.time < STALE_MS && row.value ? row : null;
+  } catch { return null; }
+}
+
+export function keepCopy(kind, ip, value) {
+  try {
+    localStorage.setItem(COPY + kind + ':' + ip, JSON.stringify({ time: Date.now(), value }));
+    const keys = Object.keys(localStorage).filter(key => key.startsWith(COPY));
+    if (keys.length > 600) {
+      keys.map(key => [key, JSON.parse(localStorage.getItem(key))?.time || 0]).sort((a, b) => a[1] - b[1])
+        .slice(0, keys.length - 500).forEach(([key]) => localStorage.removeItem(key));
+    }
+  } catch { /* Storage full or disabled: run without copies. */ }
+}
+
+export const copyAge = time => { const minutes = Math.max(1, Math.round((Date.now() - time) / 60000)); return minutes < 60 ? `${minutes} 分钟` : `${Math.round(minutes / 60)} 小时`; };
+
+function fromCopy(row, reason) {
+  const note = `本浏览器 ${copyAge(row.time)}前的结果${reason ? `；本次请求：${reason}` : '（该来源额度紧张，6 小时内不重复请求）'}`;
+  return { status: 'ok', data: { ...row.value, sourceNote: [row.value.sourceNote, note].filter(Boolean).join(' · ') }, ms: null, cachedAt: row.time };
+}
+
 export async function runSource(source, ip, ctx) {
   const started = performance.now();
+  const copy = readCopy(source.id, ip);
+  if (source.quota && copy && Date.now() - copy.time < FRESH_MS) return fromCopy(copy, '');
   try {
     const data = await source.run(ip, ctx);
     const ms = data?._ms ?? Math.round(performance.now() - started);
-    if (data) delete data._ms;
+    if (data) { delete data._ms; keepCopy(source.id, ip, data); }
     return { status: 'ok', data, ms };
   } catch (error) {
-    return { status: error.skip ? 'skip' : 'error', error: error.soft || error.skip ? error.message : '请求失败', ms: Math.round(performance.now() - started) };
+    const failed = { status: error.skip ? 'skip' : 'error', error: error.soft || error.skip ? error.message : '请求失败', ms: Math.round(performance.now() - started) };
+    return failed.status === 'error' && copy ? fromCopy(copy, failed.error) : failed;
   }
 }

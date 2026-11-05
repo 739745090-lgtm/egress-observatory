@@ -6,14 +6,16 @@
 const DEFAULT_ORIGIN = 'https://blackslience-reaper.github.io';
 const DEV_ORIGINS = new Set(['http://127.0.0.1:4187', 'http://localhost:4187']);
 const API_VERSION = 4;
-const CACHE_SECONDS = 600;
+const CACHE_SECONDS = 3600;
+// Every success is also kept this long as a fallback for when the upstream refuses (quota, rate limit, outage).
+const STALE_SECONDS = 24 * 3600;
 const RATE_WINDOW_MS = 60_000;
 const RATE_LIMIT = 30;
 const MAX_CALLER_BUCKETS = 10_000;
 const UPSTREAM_TIMEOUT = 12_000;
 const callers = new Map();
 // Small free quotas: keep their answers longer.
-const CACHE_FOR = Object.freeze({ ipqs: 6 * 3600, abuseipdb: 3600, ipregistry: 6 * 3600, ipdata: 3600, greynoise: 6 * 3600, crowdsec: 6 * 3600, getipintel: 6 * 3600, scamalytics: 6 * 3600, virustotal: 6 * 3600 });
+const CACHE_FOR = Object.freeze({ ipqs: 12 * 3600, abuseipdb: 12 * 3600, ipregistry: 12 * 3600, ipdata: 12 * 3600, greynoise: 6 * 3600, crowdsec: 6 * 3600, getipintel: 6 * 3600, scamalytics: 6 * 3600, virustotal: 6 * 3600, vpnapi: 12 * 3600, iphub: 6 * 3600, ipapiis: 12 * 3600 });
 let lastSweep = 0;
 const PAGE_SERVICE = 'https://egress-observatory-lookup.onrender.com';
 const pageRequests = new Map();
@@ -723,7 +725,7 @@ async function handle(request, env, ctx) {
   if (request.method !== method) return failure(405, 'method-not-allowed', `仅支持 ${method}。`, origin);
 
   if (url.pathname === '/health') {
-    return json({ status: 'ok', service: 'egress-observatory-api', apiVersion: API_VERSION, routes, providers: routes.filter(route => LOOKUPS[`/v1/${route}`]), cacheTTLSeconds: CACHE_SECONDS, rateLimitPerMinute: RATE_LIMIT }, 200, origin);
+    return json({ status: 'ok', service: 'egress-observatory-api', apiVersion: API_VERSION, routes, providers: routes.filter(route => LOOKUPS[`/v1/${route}`]), cacheTTLSeconds: CACHE_SECONDS, staleSeconds: STALE_SECONDS, rateLimitPerMinute: RATE_LIMIT }, 200, origin);
   }
 
   const slot = takeRateSlot(request);
@@ -750,11 +752,16 @@ async function handle(request, env, ctx) {
   const cached = await readCache(cacheKey);
   if (cached?.status === 'success' && cached.ip === ip) return json({ ...cached, cacheHit: true }, 200, origin, { 'X-Data-Cache': 'HIT' });
   const result = await PROVIDERS[lookup](ip, env);
+  const staleKey = new Request(new URL(`/__egress_cache/${lookup}-stale-v1/${encodeURIComponent(ip)}`, url.origin));
   if (result.error) {
+    // Only answers this service fetched itself are kept, so a stale copy cannot be planted by a client.
+    const stale = await readCache(staleKey);
+    if (stale?.status === 'success' && stale.ip === ip) return json({ ...stale, cacheHit: true, stale: true, staleReason: result.error.message }, 200, origin, { 'X-Data-Cache': 'STALE' });
     const { status, code, message, retryAfter: after } = result.error;
     return failure(status, code, message, origin, after ? { retryAfterSeconds: after } : {});
   }
   await writeCache(cacheKey, result.record, ctx, CACHE_FOR[lookup] || CACHE_SECONDS);
+  await writeCache(staleKey, result.record, ctx, STALE_SECONDS);
   return json({ ...result.record, duration: result.ms, cacheHit: false }, 200, origin, { 'X-Data-Cache': 'MISS' });
 }
 
