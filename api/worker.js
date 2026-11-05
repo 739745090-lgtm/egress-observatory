@@ -606,17 +606,49 @@ async function radar(url, env, origin, ctx) {
 }
 
 // ---------- cache ----------
+// A bound D1 database (under any binding name) keeps answers across isolates and regions. Without one the platform
+// Cache API is tried, which on some hosts, Sites included, keeps nothing. Only answers this service fetched are stored.
+
+let db = null;
+let schema = null;
+const cacheName = key => (typeof key === 'string' ? key : new URL(key.url).pathname);
+
+function useDatabase(env) {
+  db = Object.values(env || {}).find(value => value && typeof value.prepare === 'function' && typeof value.batch === 'function') || null;
+}
+
+function ready() {
+  schema ??= db.prepare('CREATE TABLE IF NOT EXISTS egress_cache (k TEXT PRIMARY KEY, v TEXT NOT NULL, expires INTEGER NOT NULL)').run()
+    .catch(error => { schema = null; throw error; });
+  return schema;
+}
 
 async function readCache(key) {
+  if (db) {
+    try {
+      await ready();
+      const row = await db.prepare('SELECT v FROM egress_cache WHERE k = ? AND expires > ?').bind(cacheName(key), Date.now()).first();
+      return row ? JSON.parse(row.v) : null;
+    } catch { return null; }
+  }
   const store = typeof caches !== 'undefined' ? caches.default : null;
   if (!store) return null;
   try { const hit = await store.match(key); return hit ? await hit.json() : null; } catch { return null; }
 }
 
 async function writeCache(key, body, ctx, seconds = CACHE_SECONDS) {
-  const store = typeof caches !== 'undefined' ? caches.default : null;
-  if (!store) return;
-  const write = store.put(key, new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json', 'Cache-Control': `public, max-age=${seconds}` } })).catch(() => {});
+  let write;
+  if (db) {
+    write = ready().then(async () => {
+      await db.prepare('INSERT OR REPLACE INTO egress_cache (k, v, expires) VALUES (?, ?, ?)').bind(cacheName(key), JSON.stringify(body), Date.now() + seconds * 1000).run();
+      // Expired rows are swept now and then rather than on every write.
+      if (Math.random() < 0.02) await db.prepare('DELETE FROM egress_cache WHERE expires < ?').bind(Date.now()).run();
+    }).catch(() => {});
+  } else {
+    const store = typeof caches !== 'undefined' ? caches.default : null;
+    if (!store) return;
+    write = store.put(key, new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json', 'Cache-Control': `public, max-age=${seconds}` } })).catch(() => {});
+  }
   if (ctx?.waitUntil) ctx.waitUntil(write); else await write;
 }
 
@@ -702,6 +734,7 @@ async function pageLookup(provider, ip, url, origin, ctx) {
 // ---------- router ----------
 
 async function handle(request, env, ctx) {
+  useDatabase(env);
   const sentOrigin = request.headers.get('Origin');
   const permitted = allowedOrigin(env, sentOrigin);
   if (!permitted) return failure(503, 'origin-configuration', '服务端来源配置无效。', null);
@@ -725,7 +758,7 @@ async function handle(request, env, ctx) {
   if (request.method !== method) return failure(405, 'method-not-allowed', `仅支持 ${method}。`, origin);
 
   if (url.pathname === '/health') {
-    return json({ status: 'ok', service: 'egress-observatory-api', apiVersion: API_VERSION, routes, providers: routes.filter(route => LOOKUPS[`/v1/${route}`]), cacheTTLSeconds: CACHE_SECONDS, staleSeconds: STALE_SECONDS, rateLimitPerMinute: RATE_LIMIT }, 200, origin);
+    return json({ status: 'ok', service: 'egress-observatory-api', apiVersion: API_VERSION, routes, providers: routes.filter(route => LOOKUPS[`/v1/${route}`]), cacheTTLSeconds: CACHE_SECONDS, staleSeconds: STALE_SECONDS, cacheStore: db ? 'd1' : typeof caches !== 'undefined' ? 'cache-api' : 'none', rateLimitPerMinute: RATE_LIMIT }, 200, origin);
   }
 
   const slot = takeRateSlot(request);
