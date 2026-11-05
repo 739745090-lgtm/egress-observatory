@@ -70,6 +70,14 @@ Egress 联合 20 多个 IP 数据库、16 个 DNS 黑名单、17 个威胁、代
 
 安装包保存在仓库 `downloads/`，包含完整的 `browser-helper/` 文件夹；网页“多源 IP 类型”区也提供下载和安装说明。
 
+## 自动代码审查
+
+[OpenAI PR Review](https://github.com/BlackSlience-Reaper/egress-observatory/actions/workflows/openai-review.yml) 在同仓库的非草稿 PR 新建、更新、重新打开或转为可审查时自动运行，固定使用 `gpt-6-astra`、High 推理强度，并以 `github-actions[bot]` 发布绑定实际 head commit 的 GitHub Review。新提交会取消旧运行，过期报告不发布；审查只发表意见，不批准或合并 PR。
+
+仓库管理员在 [Actions Secrets](https://github.com/BlackSlience-Reaper/egress-observatory/settings/secrets/actions) 配置专用的 `OPENAI_API_KEY` 后生效，调用计入该 key 所属 OpenAI API 项目。缺少密钥时工作流摘要会明确显示待配置并跳过审查。维护者也可在工作流页面点击 **Run workflow**，输入 PR 编号手动运行；fork PR 使用这个维护者入口。
+
+审查规则保存在 [`.github/codex/review.md`](.github/codex/review.md)，从默认分支读取。审查 job 对代码只读、禁止联网和执行项目代码，发布 job 独立运行且不接触 OpenAI 密钥；默认仅有仓库写权限的触发者可以调用模型。报告区分静态证据与实际运行，遵守不新增、不运行测试的项目规则。GitHub 自动审查与 OpenAI Platform 中保存的 Agent 定义分别配置。
+
 ## 本地运行
 
 需要 Python 3；只有跑测试时才需要 Node.js。

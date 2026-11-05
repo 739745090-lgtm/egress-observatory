@@ -1,0 +1,159 @@
+name: OpenAI PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pull_number:
+        description: Pull request number to review
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: openai-review-${{ github.event.pull_request.number || inputs.pull_number }}
+  cancel-in-progress: true
+
+jobs:
+  prepare:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (!github.event.pull_request.draft &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      enabled: ${{ steps.pr.outputs.enabled }}
+      pull_number: ${{ steps.pr.outputs.pull_number }}
+      base_sha: ${{ steps.pr.outputs.base_sha }}
+      head_sha: ${{ steps.pr.outputs.head_sha }}
+    steps:
+      - name: Resolve pull request and API configuration
+        id: pr
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          REQUESTED_PR: ${{ inputs.pull_number || github.event.pull_request.number }}
+          HAS_OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY != '' }}
+        with:
+          script: |
+            const raw = process.env.REQUESTED_PR || '';
+            if (!/^[1-9]\d*$/.test(raw)) {
+              throw new Error('Provide a positive pull request number.');
+            }
+            const pull_number = Number(raw);
+            const { data: pr } = await github.rest.pulls.get({
+              ...context.repo, pull_number,
+            });
+            core.setOutput('pull_number', String(pull_number));
+            core.setOutput('base_sha', pr.base.sha);
+            core.setOutput('head_sha', pr.head.sha);
+            const enabled = process.env.HAS_OPENAI_API_KEY === 'true';
+            core.setOutput('enabled', String(enabled));
+            await core.summary
+              .addHeading('OpenAI PR Review')
+              .addRaw(`PR #${pull_number} · gpt-6-astra · reasoning high\n\n`)
+              .addRaw(`Head: ${pr.head.sha}\n\n`)
+              .addRaw(enabled
+                ? 'Review configured. The next job reads the diff without executing project code.'
+                : `Review pending: add OPENAI_API_KEY in https://github.com/${context.repo.owner}/${context.repo.repo}/settings/secrets/actions, then run this workflow again.`)
+              .write();
+            if (!enabled) {
+              core.warning('Review was not run: OPENAI_API_KEY is not configured.');
+            }
+
+  review:
+    needs: prepare
+    if: needs.prepare.outputs.enabled == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      final_message: ${{ steps.codex.outputs.final-message }}
+    steps:
+      - name: Read trusted review instructions
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: trusted
+          persist-credentials: false
+
+      - name: Check out the exact pull request revision
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ needs.prepare.outputs.head_sha }}
+          fetch-depth: 0
+          path: source
+          persist-credentials: false
+
+      - name: Review with GPT-6 Astra High
+        id: codex
+        uses: openai/codex-action@bdf19a4a223ec2549a3e2274a0cf61556bc07675 # v1
+        env:
+          REVIEW_REPOSITORY: ${{ github.repository }}
+          REVIEW_PR_NUMBER: ${{ needs.prepare.outputs.pull_number }}
+          REVIEW_BASE_SHA: ${{ needs.prepare.outputs.base_sha }}
+          REVIEW_HEAD_SHA: ${{ needs.prepare.outputs.head_sha }}
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          model: gpt-6-astra
+          effort: high
+          codex-version: 0.166.0
+          prompt-file: ${{ github.workspace }}/trusted/.github/codex/review.md
+          working-directory: ${{ github.workspace }}/source
+          output-file: ${{ runner.temp }}/openai-review.md
+          permission-profile: ':read-only'
+          safety-strategy: drop-sudo
+          codex-args: '["--ephemeral"]'
+
+  publish:
+    needs: [prepare, review]
+    if: needs.review.outputs.final_message != ''
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Publish the review for the reviewed commit
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          REVIEW_PR_NUMBER: ${{ needs.prepare.outputs.pull_number }}
+          REVIEW_HEAD_SHA: ${{ needs.prepare.outputs.head_sha }}
+          REVIEW_BODY: ${{ needs.review.outputs.final_message }}
+        with:
+          script: |
+            const pull_number = Number(process.env.REVIEW_PR_NUMBER);
+            const head = process.env.REVIEW_HEAD_SHA;
+            const { data: pr } = await github.rest.pulls.get({
+              ...context.repo, pull_number,
+            });
+            if (pr.head.sha !== head) {
+              core.notice('A newer commit is present; the outdated review will not be published.');
+              return;
+            }
+            const marker = `<!-- openai-review:${head} -->`;
+            const reviews = await github.paginate(github.rest.pulls.listReviews, {
+              ...context.repo, pull_number, per_page: 100,
+            });
+            if (reviews.some(review =>
+              review.user?.login === 'github-actions[bot]' &&
+              review.commit_id === head && review.body?.includes(marker))) {
+              core.notice('This commit already has an OpenAI review.');
+              return;
+            }
+            const body = process.env.REVIEW_BODY.trim();
+            if (body.length > 60000) {
+              throw new Error('Review exceeds the publication limit; inspect the review job output.');
+            }
+            const { data: review } = await github.rest.pulls.createReview({
+              ...context.repo,
+              pull_number,
+              commit_id: head,
+              event: 'COMMENT',
+              body: `${marker}\n## OpenAI Review · GPT-6 Astra High\n\n${body}`,
+            });
+            await core.summary.addLink('Published PR review', review.html_url).write();
