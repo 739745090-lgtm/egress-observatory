@@ -813,8 +813,12 @@ let seenSchema = null;
 function seenReady() {
   seenSchema ??= db.batch([
     db.prepare('CREATE TABLE IF NOT EXISTS egress_salt (id INTEGER PRIMARY KEY CHECK (id = 1), salt TEXT NOT NULL)'),
+    // v2 started empty on 2026-11-05: the first table held launch-day test checks. It is emptied rather than dropped,
+    // so a worker revision still running during a deploy can keep writing to it; nothing reads it any more.
     db.prepare('CREATE TABLE IF NOT EXISTS egress_seen (target TEXT NOT NULL, querier TEXT NOT NULL, self INTEGER NOT NULL, count INTEGER NOT NULL, first INTEGER NOT NULL, last INTEGER NOT NULL, PRIMARY KEY (target, querier))'),
-    db.prepare('CREATE INDEX IF NOT EXISTS egress_seen_last ON egress_seen (last)'),
+    db.prepare('DELETE FROM egress_seen'),
+    db.prepare('CREATE TABLE IF NOT EXISTS egress_seen_v2 (target TEXT NOT NULL, querier TEXT NOT NULL, self INTEGER NOT NULL, count INTEGER NOT NULL, first INTEGER NOT NULL, last INTEGER NOT NULL, PRIMARY KEY (target, querier))'),
+    db.prepare('CREATE INDEX IF NOT EXISTS egress_seen_v2_last ON egress_seen_v2 (last)'),
     db.prepare('INSERT OR IGNORE INTO egress_salt (id, salt) VALUES (1, ?)').bind(crypto.randomUUID() + crypto.randomUUID()),
   ]).then(() => db.prepare('SELECT salt FROM egress_salt WHERE id = 1').first('salt')).catch(error => { seenSchema = null; throw error; });
   return seenSchema;
@@ -842,15 +846,15 @@ async function seen(request, url, origin) {
     const since = now - SEEN_WINDOW_MS;
     // One statement checks the hourly cap and writes, so concurrent requests cannot slip past the cap together.
     // A known querier or a lookup of someone else's address is always recorded; a new sharer only under the cap.
-    await db.prepare(`INSERT INTO egress_seen (target, querier, self, count, first, last)
+    await db.prepare(`INSERT INTO egress_seen_v2 (target, querier, self, count, first, last)
       SELECT ?1, ?2, ?3, 1, ?4, ?4
-      WHERE ?3 = 0 OR EXISTS (SELECT 1 FROM egress_seen WHERE target = ?1 AND querier = ?2)
-        OR (SELECT COUNT(*) FROM egress_seen WHERE target = ?1 AND self = 1 AND first > ?5) < ?6
+      WHERE ?3 = 0 OR EXISTS (SELECT 1 FROM egress_seen_v2 WHERE target = ?1 AND querier = ?2)
+        OR (SELECT COUNT(*) FROM egress_seen_v2 WHERE target = ?1 AND self = 1 AND first > ?5) < ?6
       ON CONFLICT (target, querier) DO UPDATE SET count = count + 1, last = excluded.last, self = MAX(self, excluded.self)`)
       .bind(ip, querier, self, now, now - 3600e3, NEW_SHARERS_PER_HOUR).run();
     // Every check also deletes rows older than the window (indexed on last), so retention does not depend on chance.
-    await db.prepare('DELETE FROM egress_seen WHERE last < ?').bind(since).run();
-    const row = await db.prepare('SELECT SUM(self) AS sharers, COUNT(*) AS lookers, SUM(count) AS lookups FROM egress_seen WHERE target = ? AND last > ?').bind(ip, since).first();
+    await db.prepare('DELETE FROM egress_seen_v2 WHERE last < ?').bind(since).run();
+    const row = await db.prepare('SELECT SUM(self) AS sharers, COUNT(*) AS lookers, SUM(count) AS lookups FROM egress_seen_v2 WHERE target = ? AND last > ?').bind(ip, since).first();
     return json({ status: 'success', ip, self: Boolean(self), callerKnown: Boolean(caller), sharers: row?.sharers || 0, lookers: row?.lookers || 0, lookups: row?.lookups || 0, windowDays: 30, observedAt: new Date(now).toISOString() }, 200, origin);
   } catch {
     return failure(503, 'seen-unavailable', '查询记录暂时不可用。', origin);
