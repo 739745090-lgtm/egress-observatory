@@ -31,7 +31,7 @@ export function setupImport() {
   document.getElementById('ipsuper-bookmark').href = 'javascript:(' + sendReport.toString() + ')(' + JSON.stringify(destination) + ');void 0';
   let report;
   if (location.hash.startsWith('#ipsuper=')) {
-    try { if (location.hash.length < 12000) report = JSON.parse(decodeURIComponent(location.hash.slice(9))); } catch {}
+    try { if (location.hash.length < 12000) report = JSON.parse(decodeURIComponent(location.hash.slice('#ipsuper='.length))); } catch {}
     history.replaceState(null, '', location.pathname + location.search);
   }
   const result = new Map();
