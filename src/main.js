@@ -9,7 +9,7 @@ import { fetchASN, inferASN, detectLease } from './asn.js';
 import { detectEgress, summarizeEgress, probeWebRTC, probeDNS, classifyDNS, probeTCP, probeEnvironment, probeIPv6, classifyIPv6, traceProbe } from './probes.js';
 import { runTurnstile, runRecaptcha } from './captcha.js';
 import { score } from './score.js';
-import * as view from './render.js?v=3.5';
+import * as view from './render.js?v=3.6';
 
 const $ = id => document.getElementById(id);
 const app = {

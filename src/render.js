@@ -368,7 +368,9 @@ function typeCell(record, field, id) {
   if (field === 'companyType' && !GIVES_COMPANY.has(id) && !record.data.companyType) return '<span class="muted">—</span>';
   const value = record.data[field];
   if (!value) return `<span class="ut ut-unknown" tabindex="0" data-tip="${esc(field === 'usageType' ? '这个来源没有给出使用类型（免费接口或套餐不含该字段）' : '这个来源没有给出公司类型')}">未知</span>`;
-  return `<span class="ut ut-${esc(value)}" tabindex="0" data-tip="${esc(`${SOURCES.find(source => source.id === id)?.name}：${UT_LABEL[value]}\n${UT_TIP[value] || ''}`)}">${esc(UT_LABEL[value] || value)}${record.data.importedFields?.includes(field) ? ' · IPSuper' : field === 'usageType' && record.data.usageVia ? ' · '+esc(record.data.usageVia) : ''}</span>`;
+  const via = record.data.importedFields?.includes(field) ? 'IPSuper' : field === 'usageType' ? record.data.usageVia : null;
+  const hint = [SOURCES.find(source => source.id === id)?.name, UT_TIP[value], via && '补充来源：'+via].filter(Boolean).join('\n');
+  return `<span class="ut ut-${esc(value)}" tabindex="0" data-tip="${esc(hint)}">${esc(UT_LABEL[value] || value)}</span>`;
 }
 
 export function renderTypes(run) {
@@ -387,7 +389,7 @@ export function renderTypes(run) {
       filled.push(`${name} ${field === 'usageType' ? '使用类型' : '公司类型'}：${UT_LABEL[data[field]] || data[field]}`);
     }
   }
-  const supplement = run.ipsuperReturned ? `<div class="type-summary" aria-label="IPSuper 补全结果"><strong>IPSuper 补全了 ${filled.length} 格</strong><p>${filled.length ? filled.map(esc).join(' · ') : '本轮已返回的类型与现有字段没有可补的空格。'}</p></div>` : '';
+  const supplement = run.ipsuperReturned ? `<div class="type-summary" aria-label="IPSuper 补全结果"><strong>本轮补全了 ${filled.length} 格</strong><p>${filled.length ? filled.map(esc).join(' · ') : '本轮已返回的类型与现有字段没有可补的空格。'}</p></div>` : '';
   $('types').innerHTML = `${supplement}<table class="type-table"><thead><tr><th></th>${ids.map(id => `<th>${esc(SOURCES.find(source => source.id === id)?.name || id)}</th>`).join('')}</tr></thead>
     <tbody>
       <tr><th scope="row">使用类型</th>${ids.map(id => `<td>${typeCell(run.sources[id], 'usageType', id)}</td>`).join('')}</tr>
