@@ -311,7 +311,7 @@ export function renderChecks(run, result) {
     botTile(run, result),
     { label: '共享人数估计', level: loading(c.sharers.level), value: c.sharers.count === null ? '—' : c.sharers.count === 1 ? '独享 IP' : c.sharers.count ? `约 ${c.sharers.count} 人` : '暂无记录',
       sub: c.sharers.count ? `${c.sharers.count === 1 ? '仅见 1 人' : c.sharers.tier} · 近 ${c.sharers.windowDays} 天` : '', pts: itemPts(result, 'sharers'),
-      title: c.sharers.count === null ? '本站的查询记录暂不可用，或服务端拿不到查询者地址' : `近 ${c.sharers.windowDays} 天里，从这个 IP 本身出口做检测的不同浏览器约 ${c.sharers.count} 个；共被 ${c.sharers.lookers} 个查询方查过 ${c.sharers.lookups} 次。1–3 人加 2 分，4–10 人正常，超过 10 人每多 1 人扣 0.5 分，最多扣 10 分。只保存加盐哈希，不保存查询者 IP。` },
+      title: c.sharers.count === null ? '估计来源：Egress 自己的检测记录；本次没有取到（记录服务不可用，或服务端拿不到查询者地址）' : `估计来源：Egress 自己的检测记录。近 ${c.sharers.windowDays} 天里，从这个 IP 本身出口做过检测的不同浏览器约 ${c.sharers.count} 个（共 ${c.sharers.lookers} 个查询方、${c.sharers.lookups} 次查询）。` },
   ];
   $('checks').innerHTML = tiles.map(tile).join('');
 }
