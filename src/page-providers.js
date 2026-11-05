@@ -1,0 +1,21 @@
+/** Fixed public lookup destinations shared by the website and Chrome helper. */
+export const PAGE_PROVIDERS = {
+  ipsuper: {name:'IPSuper',url:ip=>`https://ipsuper.com/?ip=${ip}`},
+  ipinfo: {name:'IPinfo',url:ip=>`https://ipinfo.io/${ip}`},
+  ip2location: {name:'IP2Location',url:ip=>`https://www.ip2location.io/${ip}`},
+  ipregistry: {name:'IPRegistry',url:ip=>`https://ipregistry.co/${ip}`},
+  ipapi: {name:'ip-api.com',json:true,url:ip=>`http://ip-api.com/json/${ip}?fields=status,message,query,countryCode,regionName,city,lat,lon,as,org,isp,mobile,proxy,hosting`},
+  ipdata: {name:'IPData',url:ip=>`https://ipdata.co/${ip}`},
+  abuseipdb: {name:'AbuseIPDB',url:ip=>`https://www.abuseipdb.com/check/${ip}`},
+  dbip: {name:'DB-IP',url:ip=>`https://db-ip.com/${ip}`},
+  proxycheck: {name:'Proxycheck',url:ip=>`https://proxycheck.io/threats/${ip}`},
+  ipqs: {name:'IPQualityScore',url:ip=>`https://www.ipqualityscore.com/free-ip-lookup-proxy-vpn-test/lookup/${ip}`},
+  ipapiis: {name:'ipapi.is',json:true,url:ip=>`https://api.ipapi.is/?q=${ip}`},
+  iplocate: {name:'IPLocate',json:true,url:ip=>`https://www.iplocate.io/api/lookup/${ip}`},
+  geoiplookup: {name:'GeoIPLookup',json:true,url:ip=>`https://json.geoiplookup.io/${ip}`},
+  iphub: {name:'IPHub',url:ip=>`https://iphub.info/?ip=${ip}`},
+  ipquery: {name:'IPQuery',json:true,url:ip=>`https://api.ipquery.io/${ip}?format=json`},
+  blackbox: {name:'Blackbox v3 beta',json:true,url:ip=>`https://blackbox.ipinfo.app/api/v3beta/${ip}`},
+  scamalytics: {name:'Scamalytics',url:ip=>`https://scamalytics.com/ip/${ip}`},
+  greynoise: {name:'GreyNoise',url:ip=>`https://viz.greynoise.io/ip/${ip}`},
+};

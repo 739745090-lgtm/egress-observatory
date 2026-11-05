@@ -32,6 +32,7 @@ export async function lookupPage(provider, ip, signal, progress = () => {}) {
   const deadline = AbortSignal.timeout(240000);
   const overall = AbortSignal.any([signal, deadline]);
   let lastError;
+  const failures = [];
   for (let attempt = 0; attempt < routes.length; attempt++) {
     overall.throwIfAborted();
     const route = routes[attempt];
@@ -47,13 +48,13 @@ export async function lookupPage(provider, ip, signal, progress = () => {}) {
       try { report = await response.json(); }
       catch {
         overall.throwIfAborted();
-        const error = Error('网页查询服务暂未返回有效响应');
+        const error = Error(`HTTP ${response.status}：服务返回非 JSON 响应`);
         error.retryable = response.ok || transient.has(response.status) || [403, 404].includes(response.status);
         error.skipRoute = [403, 404].includes(response.status);
         throw error;
       }
       if (!response.ok) {
-        const error = Error(report.error || `网页查询服务返回 HTTP ${response.status}`);
+        const error = Error(`HTTP ${response.status}：${report.error || '网页服务请求失败'}`);
         error.retryable = transient.has(response.status) || [403, 404].includes(response.status);
         error.skipRoute = [403, 404].includes(response.status);
         const seconds = Number(response.headers.get('Retry-After') || report.retryAfterSeconds);
@@ -77,6 +78,8 @@ export async function lookupPage(provider, ip, signal, progress = () => {}) {
       const retryable = error.retryable ?? (error instanceof TypeError || error.name === 'TimeoutError');
       if (!retryable) throw error;
       lastError = error;
+      const reason = error.name === 'TimeoutError' ? `连接超过 ${Math.round(route.timeout/1000)} 秒` : error instanceof TypeError ? '浏览器未取得响应（网络或跨域）' : error.message;
+      failures.push(new URL(route.url).host + '：' + reason);
       if (error.skipRoute) {
         while (routes[attempt + 1]?.url === route.url) attempt++;
       }
@@ -87,5 +90,5 @@ export async function lookupPage(provider, ip, signal, progress = () => {}) {
       }
     }
   }
-  throw Error(lastError instanceof TypeError ? '网页查询服务连接失败，已重试备用连接' : lastError?.message || '网页查询失败');
+  throw Error([...new Set(failures)].join('；') || lastError?.message || '网页查询失败');
 }

@@ -1,7 +1,7 @@
 import { lookupIPOK, lookupDBIPWeb, fillSource } from './supplements.js?v=3';
 import { readIPinfoPage, mergeIPinfoPage } from './ipinfo-page.js?v=3.4';
 import { setupImport, supplementTypes, readReport, readRiskReport, mergeTypeReports, mergeRiskReports } from './ipsuper.js?v=3.4';
-import { setupProviderImport, readProviderReport, mergeProviderPage, lookupChromePages, PAGE_SOURCES } from './provider-pages.js?v=3';
+import { setupProviderImport, readProviderReport, mergeProviderPage, lookupChromePages } from './provider-pages.js?v=4.1';
 /** Orchestration: detect the egress, fan out every check, rescore as results arrive. */
 import { API_BASE, PAGE_LOOKUP_CLOUD } from '../config.js?v=cloud2';
 import { lookupPage } from './page-lookups.js?v=5';
@@ -12,9 +12,10 @@ import { fetchASN, inferASN, detectLease } from './asn.js?v=4.3';
 import { detectEgress, summarizeEgress, probeWebRTC, probeDNS, classifyDNS, probeTCP, probeEnvironment, probeIPv6, classifyIPv6, traceProbe } from './probes.js';
 import { runTurnstile, runRecaptcha } from './captcha.js?v=4.2';
 import { score } from './score.js?v=4.7';
-import * as view from './render.js?v=4.18';
+import * as view from './render.js?v=4.20';
 
 const $ = id => document.getElementById(id);
+$('types').addEventListener('click',event=>{if(event.target.closest('[data-lookup-details]'))$('lookup-details').open=true;});
 const app = {
   masked: localStorage.getItem('egress-mask') === '1',
   egress: null, egressPromise: null, health: null, healthPromise: null, healthPending: false, healthAt: 0, run: null, frame: 0,
@@ -191,7 +192,7 @@ async function startRun(input, fetchPages = true) {
   const self = Boolean(egress?.ips?.some(ip => sameIP(ip, parsed.ip)));
   const run = {
     ip: parsed.ip, v: parsed.v, self, controller, healthReady, startedAt: Date.now(),
-    sources: {}, providerPages: sameIP(importedProviderIP, parsed.ip) ? {...importedProviderPages} : {}, dnsbl: [], lists: [], asn: null, asnProfile: null, probes: {}, result: null,
+    sources: {}, apiSources:{}, pageLookups:{}, chrome:{rows:{},active:false}, providerPages: sameIP(importedProviderIP, parsed.ip) ? {...importedProviderPages} : {}, dnsbl: [], lists: [], asn: null, asnProfile: null, probes: {}, result: null,
   };
   app.run = run;
   $('ip-input').value = parsed.ip;
@@ -263,6 +264,7 @@ async function startRun(input, fetchPages = true) {
   }
   const pageStatus = $('auto-page-status');
   pageStatus.textContent = '';
+  $('lookup-detail-rows').innerHTML = '';
   const challengeBox = $('chrome-challenges');
   challengeBox.innerHTML = '';
   if (fetchPages) {
@@ -270,57 +272,66 @@ async function startRun(input, fetchPages = true) {
     lookupIPOK(parsed.ip, signal).then(rows => {
       if (!alive()) return;
       ipokRows = rows; refreshTypes(); scheduleRender();
-      statuses.ipok='IPOK 间接补充 '+Object.values(rows).filter(row=>!row.unavailable).length+' 库';
-      pageStatus.textContent=Object.values(statuses).join(' ｜ ');
+      statuses.ipok={status:'ok',message:'补充 '+Object.values(rows).filter(row=>!row.unavailable).length+' 库'};
+      showStatus();
     }).catch(error => {
       if (!alive()) return;
       ipokRows = Object.fromEntries(['iphub','vpnapi','scamalytics','ipqs'].map(id => [id,{unavailable:true,reason:error.message}]));
       refreshTypes(); scheduleRender();
-      statuses.ipok='IPOK：'+error.message;
-      pageStatus.textContent=Object.values(statuses).join(' ｜ ');
+      statuses.ipok={status:'error',message:error.message};
+      showStatus();
     });
-    const statuses = {ipinfo:'IPinfo 查询中', ipsuper:'IPSuper 查询中',ipok:'IPOK 第三方查询中',sources:'来源网页自动查询排队中'};
+    const statuses = run.pageLookups = Object.fromEntries(['ipinfo','ipsuper','ipok','sources'].map(id=>[id,{status:'pending',message:'查询中'}]));
+    const showStatus = () => view.renderLookupStatus(run);
     const primaryPages = [];
-    pageStatus.textContent = Object.values(statuses).join(' · ');
+    showStatus();
     // The helper extension reads each source page in this Chrome session and reports them one by one.
-    const chromeRows = {};
+    const chromeRows = run.chrome.rows;
     let focusChrome = null;
-    const sourceName = id => SOURCES.find(source => source.id === id)?.name || id;
+    let cancelChrome = null;
+    const sourceName = id => id === 'ipsuper' ? 'IPSuper' : SOURCES.find(source => source.id === id)?.name || id;
     const showChrome = () => {
       const rows = Object.entries(chromeRows);
       const waiting = rows.filter(([, row]) => row.challenge).map(([id]) => id);
-      statuses.chrome = `Chrome 已读取 ${rows.filter(([, row]) => row.status === 'ok').length}/${rows.length} 个来源网页`
-        + (waiting.length ? `，${waiting.map(sourceName).join('、')} 等待你完成人机验证` : '');
-      pageStatus.textContent = Object.values(statuses).join(' ｜ ');
-      challengeBox.innerHTML = waiting.length && focusChrome ? '需要人机验证：' + waiting.map(id => `<button type="button" class="small accent" data-provider="${id}">去验证 ${sourceName(id)}</button>`).join(' ') : '';
+      showStatus();
+      challengeBox.innerHTML = waiting.length && focusChrome ? waiting.map(id => `<button type="button" class="small accent" data-provider="${id}">去验证 ${sourceName(id)}</button>`).join(' ') + ' <span class="muted">通过后自动补充</span> <button type="button" class="small" data-stop-waiting>停止等待</button>' : '';
     };
-    challengeBox.onclick = event => { const id = event.target.closest('button[data-provider]')?.dataset.provider; if (id && focusChrome) focusChrome(id); };
+    challengeBox.onclick = event => { const id = event.target.closest('button[data-provider]')?.dataset.provider; if (id && focusChrome) focusChrome(id); if (event.target.closest('[data-stop-waiting]')) cancelChrome?.(); };
     const applyChrome = report => {
       if (!alive() || !report) return;
       const pages = readProviderReport(report, parsed.ip);
+      if (Number.isInteger(report.total)) run.chrome.total = report.total;
+      if (report.version) run.chrome.version = report.version;
+      if (report.thirdParty) chromeRows.ipsuper = {status:report.thirdParty.status,error:String(report.thirdParty.error || '').slice(0,200),challenge:report.thirdParty.status === 'challenge',ms:report.thirdParty.ms};
       for (const [id, page] of Object.entries(pages)) {
         chromeRows[id] = page;
-        if (page.status === 'ok' || run.providerPages[id]?.status !== 'ok') run.providerPages[id] = page;
+        if (page.status !== 'skip' && (page.status === 'ok' || run.providerPages[id]?.status !== 'ok')) run.providerPages[id] = page;
       }
       if (report.ipsuper && report.ipsuper.time >= ipsuperObservedAt) {
         ipsuperPages=mergeRiskReports(ipsuperPages,readRiskReport(report.ipsuper,parsed.ip));ipsuperRisk={...ipsuperRisk,...report.ipsuper.riskPercent};
         webTypes=mergeTypeReports(webTypes,readReport(report.ipsuper,parsed.ip));ipsuperObservedAt=report.ipsuper.time;
         run.ipsuperReturned=SOURCES.filter(source=>webTypes(parsed.ip,source.id)).map(source=>source.id);
-        statuses.ipsuper='IPSuper 第三方页面已自动读取，类型与风险字段已补充';
       }
       refreshTypes(); scheduleRender(); showChrome();
     };
-    lookupChromePages(parsed.ip, pageSignal, {
-      onStart: focus => { if (!alive()) return; focusChrome = focus; statuses.chrome = 'Chrome 正在自动读取来源网页'; pageStatus.textContent = Object.values(statuses).join(' ｜ '); },
-      onPartial: applyChrome,
-    }).then(report => { if (!report || !alive()) return; applyChrome(report); focusChrome = null; showChrome(); })
-      .catch(error=>{if(alive() && !signal.aborted){focusChrome=null;challengeBox.innerHTML='';statuses.chrome=error.message;pageStatus.textContent=Object.values(statuses).join(' ｜ ');}});
+    Promise.resolve().then(async()=>{
+      const skip=[];
+      for(const id of ['ipapiis','iplocate']) {
+        const record = await ctx.sourceReady.get(id);
+        if (record?.status === 'ok' || /429|额度|限流/.test(record?.error || '')) skip.push(id);
+      }
+      return lookupChromePages(parsed.ip, signal, {
+        skip,
+        onStart: (focus,info) => { if (!alive()) return;focusChrome=focus;cancelChrome=info.cancel;run.chrome.active=true;run.chrome.version=info.version;showStatus(); },
+        onPartial: applyChrome,
+      });
+    }).then(report => { if (!alive()) return;if(report)applyChrome(report);focusChrome=null;run.chrome.active=false;showChrome(); })
+      .catch(error=>{if(alive()){focusChrome=null;run.chrome.active=false;run.chrome.error=error.message;for(const row of Object.values(chromeRows))if(row.challenge){row.challenge=false;row.status='error';row.error=error.message;}challengeBox.innerHTML='';showStatus();scheduleRender();}});
     for (const provider of ['ipinfo','ipsuper','sources']) {
-      const name = provider === 'sources' ? '来源网页' : provider === 'ipinfo' ? 'IPinfo' : 'IPSuper';
       const query = () => lookupPage(provider, parsed.ip, pageSignal, message => {
         if (!alive()) return;
-        statuses[provider] = name + '：' + message;
-        pageStatus.textContent = Object.values(statuses).join(' ｜ ');
+        statuses[provider] = {status:'pending',message};
+        showStatus();
       });
       const pageTask = (provider === 'sources' ? Promise.allSettled(primaryPages).then(() => { pageSignal.throwIfAborted(); return query(); }) : query())
         .then(report => {
@@ -333,12 +344,10 @@ async function startRun(input, fetchPages = true) {
               if (!previous || page.status === 'ok' && (previous.status !== 'ok' || page.time >= previous.time)) run.providerPages[id] = page;
             }
             const ok = Object.values(pages).filter(row => row.status === 'ok').length;
-            statuses.sources = `来源网页已返回 ${ok}/${Object.keys(pages).length}，逐源状态见下表`;
+            statuses.sources = {status:'ok',message:`读取 ${ok}/${Object.keys(pages).length}`};
           } else if (provider === 'ipinfo') {
             run.ipinfoPage = readIPinfoPage(report.text, parsed.ip);
-            const d = run.ipinfoPage;
-            statuses.ipinfo = ['IPinfo 网页已读取', d.companyName, d.asnType && 'ASN 类型 '+d.asnType,
-              typeof d.flags.hosting === 'boolean' && (d.flags.hosting ? '机房检出' : '机房未检出')].filter(Boolean).join(' · ');
+            statuses.ipinfo = {status:'ok',message:'已读取'};
           } else {
             if(report.time>=ipsuperObservedAt) {
               webTypes = mergeTypeReports(webTypes,readReport(report, parsed.ip));
@@ -349,18 +358,17 @@ async function startRun(input, fetchPages = true) {
             run.ipsuperReturned = SOURCES.filter(source => webTypes(parsed.ip, source.id)).map(source => source.id);
             const n=Object.keys(ipsuperPages).length;
             const fields=Object.values(ipsuperPages).reduce((sum,row)=>sum+Object.keys(row.data.flags).length+(row.data.risk!=null?1:0),0);
-            statuses.ipsuper = `IPSuper 间接补充 ${n} 库、${fields} 个风险字段，已参与评分`;
+            statuses.ipsuper = {status:'ok',message:`补充 ${n} 库、${fields} 字段`};
           }
           refreshTypes(); scheduleRender();
         }).catch(error => {
           if (!alive()) return;
-          statuses[provider] = name+'：'+error.message;
+          statuses[provider] = {status:'error',message:error.message};
           if (provider === 'sources') {
-            for (const id of PAGE_SOURCES) run.providerPages[id] ??= {status:'error',error:error.message};
             refreshTypes(); scheduleRender();
           }
         })
-        .finally(() => { if (alive()) pageStatus.textContent = Object.values(statuses).join(' ｜ '); });
+        .finally(() => { if (alive()) showStatus(); });
       if (provider !== 'sources') primaryPages.push(pageTask);
     }
   }
@@ -385,6 +393,7 @@ async function startRun(input, fetchPages = true) {
       }
       if (!alive()) return;
       records.set(source.id, result);
+      run.apiSources[source.id] = result;
       refreshTypes();
       if (['ripeprefix', 'ipguide'].includes(source.id) || run.sources.ripeprefix?.status !== 'pending') maybeASN();
       scheduleRender();

@@ -304,7 +304,7 @@ export const SOURCES = [
     },
   },
   {
-    id: 'geoiplookup', name: 'GeoIPLookup', group: 'intel', site: ip => `https://geoiplookup.io/ip/${ip}`,
+    id: 'geoiplookup', name: 'GeoIPLookup', group: 'intel', site: ip => `https://geoiplookup.io/geoip/${ip}`,
     async run(ip, ctx) {
       const { data } = await json(`https://json.geoiplookup.io/${encodeURIComponent(ip)}`, ctx);
       if (data.success === false) fail('拒绝查询');

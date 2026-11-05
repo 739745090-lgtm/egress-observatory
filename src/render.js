@@ -4,6 +4,7 @@ import { SOURCES } from './sources.js?v=3.3';
 import { DNSBLS, CIDR_LISTS } from './blocklists.js';
 import { CATEGORIES, TYPE_LABEL } from './score.js?v=4.7';
 import { captchaConfig } from './captcha.js';
+import { PAGE_PROVIDERS } from './page-providers.js?v=1';
 
 const $ = id => document.getElementById(id);
 
@@ -514,8 +515,10 @@ const UT_TIP = {
 
 function typeCell(record, field, id) {
   if (!record || record.status === 'pending') return `<span class="ut ut-pending">${icon('pending')}等待返回</span>`;
-  if (record.status === 'skip') return `<span class="ut ut-off" tabindex="0" data-tip="${esc(record.webLookup?.error || '需要在后端配置该数据库的 API key')}">${record.webLookup ? '网页受限' : '未配置'}</span>`;
-  if (record.status !== 'ok') return `<span class="ut ut-off" tabindex="0" data-tip="${esc(record.error || '请求失败')}">失败</span>`;
+  if (record.status !== 'ok') {
+    const reason = record.webLookup?.error || record.error || '请求失败';
+    return `<button type="button" class="ut ut-off lookup-cell" data-lookup-details data-tip="${esc(reason)}">${lookupLabel(record.webLookup || record)}</button>`;
+  }
   if (field === 'companyType' && !GIVES_COMPANY.has(id) && !record.data.companyType) return '<span class="muted">—</span>';
   const value = record.data[field];
   if (!value) return `<span class="ut ut-unknown" tabindex="0" data-tip="${esc([field === 'usageType' ? '这个来源没有给出明确的使用类型' : '这个来源没有给出公司类型',record.webLookup?.error || (record.webLookup?.status === 'ok' ? '官方网页已读取' : '')].filter(Boolean).join(' · '))}">${esc(field === 'usageType' && record.data.usageDetail || '未知')}</span>`;
@@ -540,13 +543,78 @@ export function renderTypes(run) {
       filled.push(`${name} ${field === 'usageType' ? '使用类型' : '公司类型'}：${UT_LABEL[data[field]] || data[field]}`);
     }
   }
-  const supplement = run.ipsuperReturned ? `<div class="type-summary" aria-label="IPSuper 补全结果"><strong>本轮补全了 ${filled.length} 格</strong><p>${filled.length ? filled.map(esc).join(' · ') : '本轮已返回的类型与现有字段没有可补的空格。'}</p></div>` : '';
-  $('types').innerHTML = `${supplement}<table class="type-table"><thead><tr><th></th>${ids.map(id => `<th>${esc(SOURCES.find(source => source.id === id)?.name || id)}</th>`).join('')}</tr></thead>
+  $('types').innerHTML = `<table class="type-table"><thead><tr><th></th>${ids.map(id => `<th><a href="${esc(SOURCES.find(source => source.id === id)?.site(run.ip) || '#')}" target="_blank" rel="noopener noreferrer">${esc(SOURCES.find(source => source.id === id)?.name || id)}</a></th>`).join('')}</tr></thead>
     <tbody>
       <tr><th scope="row">使用类型</th>${ids.map(id => `<td>${markClash(typeCell(run.sources[id], 'usageType', id), run.sources[id], 'usageType', run)}</td>`).join('')}</tr>
       <tr><th scope="row">公司类型</th>${ids.map(id => `<td>${markClash(typeCell(run.sources[id], 'companyType', id), run.sources[id], 'companyType', run)}</td>`).join('')}</tr>
+      ${run.chrome?.version ? `<tr class="chrome-type-row"><th scope="row">插件</th>${ids.map(id=>{const row=run.chrome.rows[id];return `<td><button type="button" class="lookup-cell ${row?.status === 'ok' ? 'lookup-ok' : row?.challenge ? 'lookup-wait' : ''}" data-lookup-details data-tip="${esc(row ? lookupDetail(row) : run.chrome.active ? '排队中' : '此版本插件未返回该来源')}" aria-label="${esc((PAGE_PROVIDERS[id]?.name || id)+' 插件查询详情')}">${row ? lookupLabel(row) : run.chrome.active ? '排队' : '未返回'}</button></td>`;}).join('')}</tr>` : ''}
     </tbody></table>
-    <p class="muted small type-summary">使用类型：${esc(tally('usageType'))}；公司类型：${esc(tally('companyType'))}。使用类型参与“网络类型”投票，公司类型作为第三方证据参与 ASN 类型推断。</p>`;
+    <p class="muted small type-summary">使用：${esc(tally('usageType'))} · 公司：${esc(tally('companyType'))}${filled.length ? ` · 补充 ${filled.length} 项` : ''}</p>`;
+  renderLookupStatus(run);
+}
+
+function lookupLabel(row) {
+  if (row.challenge || row.status === 'challenge') return '待验证';
+  if (row.status === 'pending') return '查询中';
+  if (row.status === 'ok') return '已读取';
+  const reason = row.error || row.message || '';
+  if (/停止|取消/.test(reason)) return '已停止';
+  if (/额度|频率|限流|429/.test(reason)) return '限流';
+  if (row.status === 'skip') return /未配置/.test(reason) ? '未配置' : '已跳过';
+  if (/校验提示已消失/.test(reason)) return '字段缺失';
+  if (/人机|校验/.test(reason)) return '待验证';
+  if (/401|403|拒绝/.test(reason)) return '拒绝访问';
+  if (/超时|超过|秒未返回/.test(reason)) return '超时';
+  if (/连接|网络|跨域|Failed to fetch/.test(reason)) return '连接失败';
+  if (/字段|版式|JSON|未找到/.test(reason)) return '字段缺失';
+  return '失败';
+}
+
+function lookupDetail(row) {
+  if (row.challenge || row.status === 'challenge') return '等待手动验证，通过后自动补充';
+  if (row.status !== 'ok') return row.error || row.message || '查询中';
+  if (row.message) return row.message;
+  const d = row.data;
+  if (!d) return '已读取';
+  const parts = ['usageType','companyType'].filter(key=>d[key]).map(key=>(key==='usageType'?'使用：':'公司：')+(UT_LABEL[d[key]] || d[key]));
+  if(d.risk != null)parts.push(`风险 ${d.risk}/100`);
+  if(d.trustScore != null)parts.push(`信任 ${d.trustScore}/100`);
+  const labels={vpn:'VPN',proxy:'代理',tor:'Tor',hosting:'机房',relay:'中继',abuser:'滥用',crawler:'爬虫',mobile:'移动',bogon:'Bogon'};
+  for(const [key,value] of Object.entries(d.flags || {}))if(typeof value==='boolean')parts.push(`${labels[key] || key}${value?'检出':'未检出'}`);
+  if(d.asnType)parts.push('ASN：'+d.asnType);
+  if(!d.usageType && !d.companyType)parts.push('未提供类型');
+  if(row.cached)parts.push('10 分钟内缓存');
+  return parts.join(' · ');
+}
+
+export function renderLookupStatus(run) {
+  const chrome = run.chrome || {rows:{}};
+  const rows = Object.values(chrome.rows);
+  const ok = rows.filter(row=>row.status==='ok').length;
+  const waiting = rows.filter(row=>row.challenge || row.status==='challenge').length;
+  const failed = rows.filter(row=>row.status==='error' && !row.challenge).length;
+  const server = Object.values(run.pageLookups || {});
+  const parts = [];
+  if(chrome.version)parts.push(`插件 ${ok}/${chrome.total || rows.length || '…'}`+(chrome.active?' 查询中':''));
+  else parts.push('未连接插件');
+  if(waiting)parts.push(`${waiting} 个待验证`);
+  if(failed)parts.push(`${failed} 个失败`);
+  if(chrome.error)parts.push(chrome.error);
+  if(chrome.version && /^1\.(?:[012]\.|3\.0$)/.test(chrome.version))parts.push('请更新至 v1.3.1');
+  if(server.length)parts.push(`服务器补充 ${server.filter(row=>row.status==='ok').length}/${server.length}`);
+  $('auto-page-status').textContent=parts.join(' · ');
+  const details=[];
+  const add=(name,channel,row)=>details.push({name,channel,row});
+  for(const [id,row] of Object.entries(chrome.rows))add(PAGE_PROVIDERS[id]?.name || id,'插件',row);
+  for(const id of TYPE_SOURCES) {
+    const row=run.apiSources?.[id];
+    if(row && row.status!=='ok')add(SOURCES.find(s=>s.id===id)?.name || id,'API',row);
+    const page=run.providerPages?.[id];
+    if(page && page.via!=='Chrome' && page.status!=='ok')add(PAGE_PROVIDERS[id]?.name || id,'服务器网页',page);
+  }
+  for(const [id,row] of Object.entries(run.pageLookups || {}))add(({ipinfo:'IPinfo',ipsuper:'IPSuper',ipok:'IPOK',sources:'来源网页'})[id] || id,'服务器',row);
+  details.sort((a,b)=>(a.row.status==='ok')-(b.row.status==='ok'));
+  $('lookup-detail-rows').innerHTML=details.map(({name,channel,row})=>`<tr><th scope="row">${esc(name)}</th><td>${esc(channel)}</td><td class="${row.challenge?'lookup-wait':row.status==='ok'?'lookup-ok':''}">${lookupLabel(row)}</td><td>${esc(lookupDetail(row))}</td><td>${Number.isFinite(row.ms)?(row.ms/1000).toFixed(1)+' s':'—'}</td></tr>`).join('');
 }
 
 // ---------- geo comparison ----------
@@ -572,6 +640,7 @@ export function renderGeo(run, result) {
 
 function sourceValue(id, d) {
   if (!d) return '';
+  if (Number.isFinite(d.trustScore)) return '信任分 '+d.trustScore+'/100';
   if (Number.isFinite(d.webRiskScore)) return '风险值 '+d.webRiskScore+'/100';
   if (Number.isFinite(d.webRiskPercent)) return '网页风险 '+d.webRiskPercent+'%';
   if (d.importedFields?.length && !d.country && d.risk == null) return [UT_LABEL[d.usageType],UT_LABEL[d.companyType]].filter(Boolean).join(' / ');

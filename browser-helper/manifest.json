@@ -1,13 +1,15 @@
 {
   "manifest_version": 3,
   "name": "Egress 自动网页查询",
-  "version": "1.2.1",
-  "description": "用当前 Chrome 会话读取 IPSuper、IPHub、IPQualityScore、Scamalytics、IP2Location、GreyNoise、DB-IP、IPRegistry、Blackbox 与 IPQuery 的检测结果，回传给 Egress 并清理临时标签。",
+  "version": "1.3.1",
+  "description": "读取 18 个 IP 来源；等待手动人机验证，通过后自动补充结果；逐源报告失败原因并清理临时标签。",
   "permissions": ["tabs", "scripting", "tabGroups"],
   "host_permissions": [
     "https://ipsuper.com/*", "https://iphub.info/*", "https://www.ipqualityscore.com/*", "https://scamalytics.com/*",
     "https://www.ip2location.io/*", "https://viz.greynoise.io/*", "https://db-ip.com/*",
-    "https://ipregistry.co/*", "https://blackbox.ipinfo.app/*", "https://api.ipquery.io/*"
+    "https://ipregistry.co/*", "https://blackbox.ipinfo.app/*", "https://api.ipquery.io/*",
+    "https://ipinfo.io/*", "https://ipdata.co/*", "https://www.abuseipdb.com/*", "https://proxycheck.io/*",
+    "http://ip-api.com/*", "https://api.ipapi.is/*", "https://www.iplocate.io/*", "https://json.geoiplookup.io/*"
   ],
   "background": {"service_worker": "background.js", "type": "module"},
   "content_scripts": [{

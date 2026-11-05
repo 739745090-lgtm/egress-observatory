@@ -1,9 +1,10 @@
 import { sameIP } from './util.js';
 import { fillSource } from './supplements.js?v=3';
-import { extractProviderPage } from './page-extract.js?v=3';
+import { extractProviderPage } from './page-extract.js?v=4.1';
+import { PAGE_PROVIDERS } from './page-providers.js?v=1';
 
-export const PAGE_SOURCES = ['iphub','ipqs','ipdata','ipregistry','dbip','scamalytics','ipapiis','ipquery','blackbox','ip2location','greynoise'];
-const fields = new Set(['country','city','region','asn','org','usageType','companyType','asnType','usageDetail','connectionType','risk','block','geoVote','lat','lon','noise','classification','name','lastSeen','proxyProvider']);
+export const PAGE_SOURCES = Object.keys(PAGE_PROVIDERS).filter(id=>id!=='ipsuper');
+const fields = new Set(['country','city','region','asn','org','companyName','tz','usageType','companyType','asnType','usageDetail','connectionType','risk','trustScore','riskLabel','block','geoVote','lat','lon','noise','classification','name','lastSeen','proxyProvider']);
 const types = new Set(['residential','mobile','business','hosting','education','government']);
 
 export function readProviderReport(report, ip) {
@@ -12,13 +13,14 @@ export function readProviderReport(report, ip) {
   for (const id of PAGE_SOURCES) {
     const row = report.sources[id];
     if (!row) continue;
-    if (row.status !== 'ok') { result[id] = {status:'error',error:String(row.error || '网页未返回字段').slice(0,120),...(row.status === 'challenge' ? {challenge:true} : {})}; continue; }
+    const meta = {...(row.via === 'Chrome' ? {via:'Chrome'} : {}),...(Number.isFinite(row.ms) && row.ms >= 0 ? {ms:row.ms} : {}),...(row.cached ? {cached:true} : {})};
+    if (row.status !== 'ok') { result[id] = {...meta,status:row.status === 'skip' ? 'skip' : 'error',error:String(row.error || '网页未返回字段').slice(0,200),...(row.status === 'challenge' ? {challenge:true} : {})}; continue; }
     if (!Number.isFinite(row.time) || Math.abs(Date.now()-row.time)>600000) continue;
     const data = {flags:{}};
     for (const [key,value] of Object.entries(row.data || {})) {
       if (!fields.has(key) || value == null) continue;
       if (key === 'usageType' || key === 'companyType') { if (types.has(value)) data[key] = value; }
-      else if (key === 'risk') { if (typeof value === 'number' && value >= 0 && value <= 100) data[key] = value; }
+      else if (key === 'risk' || key === 'trustScore') { if (typeof value === 'number' && value >= 0 && value <= 100) data[key] = value; }
       else if (key === 'asn') { if (Number.isInteger(value) && value > 0 && value <= 4294967295) data[key] = value; }
       else if (key === 'block') { if ([0,1,2].includes(value)) data[key] = value; }
       else if (key === 'geoVote' || key === 'noise') { if (typeof value === 'boolean') data[key] = value; }
@@ -28,13 +30,14 @@ export function readProviderReport(report, ip) {
     for (const key of ['vpn','proxy','tor','hosting','mobile','abuser','crawler','relay','resProxy','bogon']) if (typeof row.data?.flags?.[key] === 'boolean') data.flags[key] = row.data.flags[key];
     if (!Object.keys(data.flags).length && Object.keys(data).every(key => ['flags','geoVote'].includes(key))) {
       result[id] = {status:'error',error:'网页未提供可读取的目标字段'};
-    } else result[id] = {status:'ok',data,time:row.time,...(row.via === 'Chrome' ? {via:'Chrome'} : {})};
+    } else result[id] = {...meta,status:'ok',data,time:row.time};
   }
   return result;
 }
 
 export function mergeProviderPage(record, page, name) {
   if (!page) return record;
+  if (page.status === 'skip') return record;
   if (page.status !== 'ok') return {...record,webLookup:page,...(record.status === 'ok' ? {} : {error:[record.error, page.error].filter(Boolean).join(' · ')})};
   const data = {...page.data};
   data.flags = {...page.data.flags};
@@ -55,13 +58,18 @@ export function mergeProviderPage(record, page, name) {
  * onStart(focus) fires once it answers; focus(provider) brings a page waiting on a human check to the front.
  * onPartial(report) receives each source as soon as it is read; the promise resolves with the full report.
  */
-export function lookupChromePages(ip,signal,{onStart=()=>{},onPartial=()=>{}}={}) {
+export function lookupChromePages(ip,signal,{onStart=()=>{},onPartial=()=>{},skip=[]}={}) {
   return new Promise((resolve,reject)=>{
     signal.throwIfAborted();
     const requestId = crypto.randomUUID();
     let started = false;
     let discover,timeout;
-    const send = (kind,extra={}) => window.postMessage({channel:'egress-browser-client',kind,requestId,ip,...extra},location.origin);
+    const waiting = new Set();
+    const send = (kind,extra={}) => window.postMessage({channel:'egress-browser-client',kind,requestId,ip,skip,...extra},location.origin);
+    const resetTimeout = () => {
+      clearTimeout(timeout);
+      if (!waiting.size) timeout=setTimeout(()=>{send('cancel');finish(null,Error('插件 90 秒未返回进度，已取消剩余查询'));},90000);
+    };
     const finish = (value,error) => { clearTimeout(discover);clearTimeout(timeout);window.removeEventListener('message',receive);signal.removeEventListener('abort',abort); error ? reject(error) : resolve(value); };
     const abort = () => { send('cancel'); finish(null,signal.reason); };
     const receive = event => {
@@ -69,12 +77,17 @@ export function lookupChromePages(ip,signal,{onStart=()=>{},onPartial=()=>{}}={}
       const message = event.data;
       if(message.kind==='ready' && (!message.requestId || message.requestId===requestId) && !started) {
         started=true;clearTimeout(discover);send('lookup');
-        onStart(provider=>send('focus',{provider}));
-        timeout=setTimeout(()=>{send('cancel');finish(null,Error('Chrome 网页读取超时'));},230000);
+        onStart(provider=>send('focus',{provider}),{version:message.version,cancel:()=>send('cancel')});
+        resetTimeout();
       }
       if(message.requestId!==requestId) return;
-      if(message.kind==='partial') { try { onPartial(message.report); } catch { /* A malformed partial row is dropped; the final report repeats it. */ } }
-      else if(message.kind==='report') finish(message.report);
+      if(message.kind==='partial') {
+        const rows = {...message.report?.sources,...(message.report?.thirdParty ? {ipsuper:message.report.thirdParty} : {})};
+        for (const [id,row] of Object.entries(rows)) row.status === 'challenge' ? waiting.add(id) : waiting.delete(id);
+        resetTimeout();
+        try { onPartial(message.report); } catch { /* The final report repeats each partial row. */ }
+      }
+      else if(message.kind==='report') finish(message.report,message.report?.error ? Error(message.report.error) : null);
       else if(message.kind==='error') finish(null,Error(message.error));
     };
     window.addEventListener('message',receive);
