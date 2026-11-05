@@ -1,3 +1,4 @@
+import { readIPinfoPage, mergeIPinfoPage } from './ipinfo-page.js';
 import { setupImport, supplementTypes } from './ipsuper.js?v=2.4';
 /** Orchestration: detect the egress, fan out every check, rescore as results arrive. */
 import { API_BASE } from '../config.js';
@@ -167,6 +168,8 @@ async function startRun(input) {
   if (self) url.searchParams.delete('ip'); else url.searchParams.set('ip', parsed.ip);
   history.replaceState(null, '', url);
   view.crossLinks(parsed.ip);
+  $('ipinfo-page-link').href = 'https://ipinfo.io/' + encodeURIComponent(parsed.ip);
+  $('ipinfo-message').textContent = '';
   $('ipsuper-query').href = 'https://ipsuper.com/?ip=' + encodeURIComponent(parsed.ip);
 
   const ctx = { signal, healthReady: app.healthPromise, sourceReady: new Map() };
@@ -198,7 +201,8 @@ async function startRun(input) {
     ctx.sourceReady.set(source.id, sourceTask);
     tasks.push(sourceTask.then(result => {
       if (!alive()) return;
-      run.sources[source.id] = supplementTypes(result, importedTypes(parsed.ip, source.id));
+      const direct = source.id === 'ipinfo' ? mergeIPinfoPage(result, run.ipinfoPage) : result;
+      run.sources[source.id] = supplementTypes(direct, importedTypes(parsed.ip, source.id));
       if (['ripeprefix', 'ipguide'].includes(source.id) || run.sources.ripeprefix?.status !== 'pending') maybeASN();
       scheduleRender();
     }));
@@ -328,6 +332,21 @@ $('self-check').addEventListener('click', () => {
   refreshEgress({ autoStart: true });
 });
 
+$('ipinfo-apply').addEventListener('click', () => {
+  const run = app.run;
+  if (!run) return;
+  try {
+    const page = readIPinfoPage($('ipinfo-text').value, run.ip);
+    run.ipinfoPage = page;
+    run.sources.ipinfo = mergeIPinfoPage(run.sources.ipinfo || {}, page);
+    $('ipinfo-text').value = '';
+    const labels = {vpn:'VPN',proxy:'代理',tor:'Tor',relay:'中继',hosting:'机房'};
+    $('ipinfo-message').textContent = [run.ip, page.companyName, page.asnType && 'ASN 类型 '+page.asnType,
+      ...Object.entries(page.flags).map(([k,v])=>labels[k]+' '+(v?'检出':'未检出')),
+      typeof page.resProxy === 'boolean' && '住宅代理 '+(page.resProxy?'检出':'未检出')].filter(Boolean).join(' · ');
+    scheduleRender();
+  } catch (error) { $('ipinfo-message').textContent = error.message; }
+});
 const importedTypes = setupImport();
 const requested = new URLSearchParams(location.search).get('ip');
 view.initTooltips();
