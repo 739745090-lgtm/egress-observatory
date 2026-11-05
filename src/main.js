@@ -1,4 +1,4 @@
-import { lookupIPOK, fillSource } from './supplements.js';
+import { lookupIPOK, lookupDBIPWeb, fillSource } from './supplements.js?v=2';
 import { readIPinfoPage, mergeIPinfoPage } from './ipinfo-page.js?v=3.4';
 import { setupImport, supplementTypes, readReport } from './ipsuper.js?v=3.1';
 /** Orchestration: detect the egress, fan out every check, rescore as results arrive. */
@@ -221,7 +221,7 @@ async function startRun(input, fetchPages = true) {
         data = fillSource(data, {flags:row.flags, webRiskPercent:row.percent}, 'IPOK 逐库观察'+(row.observedAt ? ' · '+row.observedAt : ''));
       }
       data = supplementTypes(data, webTypes(parsed.ip, id));
-      if (row?.unavailable && data.status !== 'ok') data = {...data,error:'网页来源暂缺 · '+row.reason};
+      if (row?.unavailable && data.status !== 'ok') data = {...data,error:row.reason === 'cached_only' ? '网页暂无该 IP 的缓存记录' : '网页来源暂缺 · '+row.reason};
       run.sources[id] = data;
     }
   }
@@ -268,6 +268,10 @@ async function startRun(input, fetchPages = true) {
     ctx.sourceReady.set(source.id, sourceTask);
     tasks.push(sourceTask.then(async result => {
       if (!alive()) return;
+      if (fetchPages && source.id === 'dbip' && result.status !== 'ok') {
+        const fields = await lookupDBIPWeb(parsed.ip,signal);
+        if (fields) result = fillSource(result,fields,'DB-IP City Lite，经 Net Atlas 的逐来源地理记录补充');
+      }
       if (fetchPages && source.id === 'getipintel' && result.status !== 'ok') {
         try {
           const response = await fetch(PAGE_LOOKUP_CLOUD + '/lookup/getipintel', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ip:parsed.ip}),signal:AbortSignal.any([signal,AbortSignal.timeout(130000)])});

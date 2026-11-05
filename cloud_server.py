@@ -6,7 +6,7 @@ import urllib.request
 import urllib.parse
 import threading
 import time
-from collections import OrderedDict
+from collections import OrderedDict, deque
 
 from flask import Flask, jsonify, request
 from local_server import lookup
@@ -16,6 +16,8 @@ app.config["MAX_CONTENT_LENGTH"] = 256
 ORIGIN = "https://blackslience-reaper.github.io"
 CACHE = OrderedDict()
 BROWSER = threading.Lock()
+CONTACT_API = threading.Lock()
+CONTACT_CALLS = deque()
 
 
 @app.after_request
@@ -51,7 +53,8 @@ def report(provider):
         return {"error": "需要有效的公网 IP"}, 400
     ip = str(addr)
     key = (provider, ip)
-    if not BROWSER.acquire(timeout=50):
+    gate = CONTACT_API if provider == 'getipintel' else BROWSER
+    if not gate.acquire(timeout=75):
         return {"error": "查询服务繁忙，请稍后重试"}, 429
     try:
         cached = CACHE.get(key)
@@ -60,6 +63,11 @@ def report(provider):
         if provider == 'getipintel':
             contact = os.environ.get('GETIPINTEL_CONTACT')
             if not contact: return {'error':'联系邮箱未配置'}, 503
+            now = time.monotonic()
+            while CONTACT_CALLS and CONTACT_CALLS[0] <= now-86400: CONTACT_CALLS.popleft()
+            if len(CONTACT_CALLS) >= 500 or sum(t > now-60 for t in CONTACT_CALLS) >= 15:
+                return {'error':'GetIPIntel 免费查询额度已用完'}, 429
+            CONTACT_CALLS.append(now)
             params = urllib.parse.urlencode({'ip':ip,'contact':contact,'format':'json','flags':'m'})
             req = urllib.request.Request('https://check.getipintel.net/check.php?'+params,headers={'User-Agent':'Egress-Observatory/1.0 (+https://github.com/BlackSlience-Reaper/egress-observatory)'})
             with urllib.request.urlopen(req,timeout=12) as response:
@@ -80,4 +88,4 @@ def report(provider):
         app.logger.warning("%s lookup failed: %s", provider, type(exc).__name__)
         return {"error": provider + " 网页查询失败"}, 502
     finally:
-        BROWSER.release()
+        gate.release()

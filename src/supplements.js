@@ -42,3 +42,11 @@ export function fillSource(record, extra, note) {
   data.sourceNote = [data.sourceNote,note].filter(Boolean).join(' · ');
   return {...record,status:'ok',directStatus:record.directStatus || record.status,directError:record.directError || record.error,error:null,data};
 }
+
+export async function lookupDBIPWeb(ip, signal) {
+  const response = await getJSON('https://atlas.ipinfo.app/api/v2/geo/'+encodeURIComponent(ip), {signal,timeout:12000});
+  if (!response.ok || !sameIP(response.data?.ip,ip)) return null;
+  const baseline = response.data.evidence?.find(row => row.source === 'baseline' && row.detail === 'DB-IP City Lite');
+  if (!baseline || !/^[A-Z]{2}$/.test(baseline.country_code)) return null;
+  return {country:baseline.country_code,region:baseline.region,city:baseline.city,geoVote:true};
+}
