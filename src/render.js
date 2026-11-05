@@ -421,6 +421,8 @@ export function renderGeo(run, result) {
 
 function sourceValue(id, d) {
   if (!d) return '';
+  if (Number.isFinite(d.webRiskPercent)) return '网页风险 '+d.webRiskPercent+'%';
+  if (d.importedFields?.length && !d.country && d.risk == null) return [UT_LABEL[d.usageType],UT_LABEL[d.companyType]].filter(Boolean).join(' / ');
   switch (id) {
     case 'rdap': return `注册地 ${d.regCountry || '—'}${d.netname ? ` · ${d.netname}` : ''}`;
     case 'riperir': return `分配地 ${d.regCountry || '—'}`;

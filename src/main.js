@@ -1,7 +1,8 @@
+import { lookupIPOK, fillSource } from './supplements.js';
 import { readIPinfoPage, mergeIPinfoPage } from './ipinfo-page.js?v=3.4';
 import { setupImport, supplementTypes, readReport } from './ipsuper.js?v=3.1';
 /** Orchestration: detect the egress, fan out every check, rescore as results arrive. */
-import { API_BASE } from '../config.js';
+import { API_BASE, PAGE_LOOKUP_BASE, PAGE_LOOKUP_CLOUD } from '../config.js?v=cloud1';
 import { getJSON, parseIP, isPublicIP, sameIP, maskIP } from './util.js';
 import { SOURCES, runSource } from './sources.js?v=3.2';
 import { DNSBLS, checkDNSBL, CIDR_LISTS, checkCIDRList, asnAbuseDensity } from './blocklists.js';
@@ -9,7 +10,7 @@ import { fetchASN, inferASN, detectLease } from './asn.js';
 import { detectEgress, summarizeEgress, probeWebRTC, probeDNS, classifyDNS, probeTCP, probeEnvironment, probeIPv6, classifyIPv6, traceProbe } from './probes.js';
 import { runTurnstile, runRecaptcha } from './captcha.js';
 import { score } from './score.js';
-import * as view from './render.js?v=3.6';
+import * as view from './render.js?v=cloud2';
 
 const $ = id => document.getElementById(id);
 const app = {
@@ -196,6 +197,8 @@ async function startRun(input, fetchPages = true) {
   };
 
   let webTypes = importedTypes;
+  let ipokRows = {};
+  let ipsuperRisk = {};
   const records = new Map();
   function refreshTypes() {
     const abuse = records.get('abuseipdb')?.data;
@@ -205,17 +208,39 @@ async function startRun(input, fetchPages = true) {
         const d = {...data.data, flags:data.data?.flags || {}, usageType:abuse.usageType, type:data.data?.type || abuse.usageType, usageVia:'AbuseIPDB'};
         data = {...data,status:'ok',directStatus:data.status,error:null,data:d};
       }
-      run.sources[id] = supplementTypes(data, webTypes(parsed.ip, id));
+      const atlas = records.get('netatlas')?.data;
+      if (id === 'dbip' && atlas?.locationDatabase === 'DB-IP City Lite') {
+        data = fillSource(data, {country:atlas.country,city:atlas.city,region:atlas.region}, 'DB-IP City Lite，经 Net Atlas 转供');
+      }
+      const namedRisk = ipsuperRisk[{ipqs:'IPQualityScore', scamalytics:'Scamalytics', dbip:'DBIP'}[id]];
+      if (Number.isFinite(namedRisk) && namedRisk >= 0 && namedRisk <= 100 && data.data?.risk == null) {
+        data = fillSource(data, {webRiskPercent:namedRisk}, 'IPSuper 网页逐库风险百分比，仅展示');
+      }
+      const row = ipokRows[id];
+      if (row && !row.unavailable && record.status !== 'ok') {
+        data = fillSource(data, {flags:row.flags, webRiskPercent:row.percent}, 'IPOK 逐库观察'+(row.observedAt ? ' · '+row.observedAt : ''));
+      }
+      data = supplementTypes(data, webTypes(parsed.ip, id));
+      if (row?.unavailable && data.status !== 'ok') data = {...data,error:'网页来源暂缺 · '+row.reason};
+      run.sources[id] = data;
     }
   }
   const pageStatus = $('auto-page-status');
   pageStatus.textContent = '';
   if (fetchPages) {
+    lookupIPOK(parsed.ip, signal).then(rows => {
+      if (!alive()) return;
+      ipokRows = rows; refreshTypes(); scheduleRender();
+    }).catch(error => {
+      if (!alive()) return;
+      ipokRows = Object.fromEntries(['iphub','vpnapi','scamalytics','ipqs'].map(id => [id,{unavailable:true,reason:error.message}]));
+      refreshTypes(); scheduleRender();
+    });
     const statuses = {ipinfo:'IPinfo 查询中', ipsuper:'IPSuper 查询中'};
     pageStatus.textContent = Object.values(statuses).join(' · ');
     for (const provider of Object.keys(statuses)) {
       const name = provider === 'ipinfo' ? 'IPinfo' : 'IPSuper';
-      fetch('http://127.0.0.1:4188/lookup/' + provider, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ip:parsed.ip}),signal:AbortSignal.any([signal,AbortSignal.timeout(80000)])})
+      fetch(PAGE_LOOKUP_BASE + '/lookup/' + provider, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ip:parsed.ip}),signal:AbortSignal.any([signal,AbortSignal.timeout(150000)])})
         .then(async response => {
           const report = await response.json();
           if (!response.ok) throw Error(report.error || '网页查询失败');
@@ -228,11 +253,12 @@ async function startRun(input, fetchPages = true) {
               typeof d.flags.hosting === 'boolean' && (d.flags.hosting ? '机房检出' : '机房未检出')].filter(Boolean).join(' · ');
           } else {
             webTypes = readReport(report, parsed.ip);
+            ipsuperRisk = report.riskPercent || {};
             run.ipsuperReturned = SOURCES.filter(source => webTypes(parsed.ip, source.id)).map(source => source.id);
             statuses.ipsuper = 'IPSuper 网页已读取';
           }
           refreshTypes(); scheduleRender();
-        }).catch(error => {statuses[provider] = name+'：'+(error instanceof TypeError ? '请启动本机网页读取服务' : error.message);})
+        }).catch(error => {statuses[provider] = name+'：'+(error instanceof TypeError ? '线上网页查询服务连接失败' : error.message);})
         .finally(() => { if (alive()) pageStatus.textContent = Object.values(statuses).join(' ｜ '); });
     }
   }
@@ -240,7 +266,17 @@ async function startRun(input, fetchPages = true) {
   for (const source of active) {
     const sourceTask = runSource(source, parsed.ip, ctx);
     ctx.sourceReady.set(source.id, sourceTask);
-    tasks.push(sourceTask.then(result => {
+    tasks.push(sourceTask.then(async result => {
+      if (!alive()) return;
+      if (fetchPages && source.id === 'getipintel' && result.status !== 'ok') {
+        try {
+          const response = await fetch(PAGE_LOOKUP_CLOUD + '/lookup/getipintel', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ip:parsed.ip}),signal:AbortSignal.any([signal,AbortSignal.timeout(130000)])});
+          const answer = await response.json();
+          if (response.ok && sameIP(answer.ip,parsed.ip) && Number.isFinite(answer.probability) && answer.probability>=0 && answer.probability<=1) {
+            result = fillSource(result,{probability:answer.probability,risk:answer.risk},'GetIPIntel 官方免费接口');
+          } else if (answer.error) result = {...result,error:answer.error};
+        } catch { /* Retain the first route's concrete failure. */ }
+      }
       if (!alive()) return;
       records.set(source.id, result);
       refreshTypes();

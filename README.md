@@ -42,7 +42,7 @@ python local_server.py
 
 打开 http://127.0.0.1:4187/ 。后端只允许 GitHub Pages 和本地 4187 端口跨域调用。加 `?captchaTest=1`（仅本地）会用 Cloudflare 的测试 key 跑一遍 Turnstile 流程，结果恒为通过。
 
-Windows 双击“启动网站.cmd”启动本机查询服务。点击“查询”后，服务并行读取该 IP 的 IPinfo 详情页与 IPSuper 多库表，各自校验目标地址并补充缺失字段。需要 Python、Playwright 和 Chromium（首次安装可运行 python -m pip install playwright 和 python -m playwright install chromium）。同一 IP 的页面结果在内存保留 10 分钟。GitHub Pages 使用此功能也需要本机服务运行。IPinfo 网页和官方接口合并为一条数据库记录。IPSuper 补充的类型按原库名标识。
+Windows 双击“启动网站.cmd”启动本机查询服务。点击“查询”后，服务并行读取该 IP 的 IPinfo 详情页与 IPSuper 多库表，各自校验目标地址并补充缺失字段。需要 Python、Playwright 和 Chromium（首次安装可运行 python -m pip install playwright 和 python -m playwright install chromium）。同一 IP 的页面结果在内存保留 10 分钟。GitHub Pages 自动使用线上 Chromium 服务；访客只需打开网站并查询。免费容器休眠后的首次请求可能需要等待唤醒。Linux 容器从 Dockerfile 启动，/health 提供健康状态。IPinfo 网页和官方接口合并为一条数据库记录。IPSuper 补充的类型按原库名标识。
 
 ## 代码结构
 
