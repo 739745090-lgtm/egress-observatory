@@ -45,7 +45,7 @@ export const SOURCE_WEIGHTS = Object.freeze({
   virustotal: { flags: 0.8, risk: 0.8, observed: true },
   onionoo: { flags: 1.0 },
   abuseipdb: { flags: 1.0, type: 0.9, risk: 1.2 },
-  ipqs: { flags: 1.0, type: 0.9, risk: 1.3 },
+  ipqs: { flags: 1.0, type: 0.9, risk: 0.7 },
   ipregistry: { flags: 0.9, type: 0.9 },
   ipdata: { flags: 0.8, type: 0.8, risk: 0.8 },
   ptr: { flags: 0.5, type: 0.5 },
@@ -306,7 +306,7 @@ export function score(evidence) {
       add('network', 'asn-conflict', '类型与 ASN 不符', 5 * asnHosting, asnConsistency.text);
     } else if (homeLike && asnCls === 'transit') {
       asnConsistency = { ok: true, warn: true, text: `标为${TYPE_LABEL[ipType]}，宣告方却是骨干 / 传输网：骨干网本身可靠，但家宽很少直接挂在它下面，这个标签存疑` };
-      add('network', 'asn-transit', '骨干网下的家宽标签存疑', 2, asnConsistency.text);
+      add('network', 'asn-transit', '骨干网下的家宽标签存疑', 1, asnConsistency.text);
     } else if (ipType === 'hosting' && (asnCls === 'isp' || asnCls === 'mobile')) {
       asnConsistency = { ok: true, warn: true, text: '运营商 ASN 中的机房段（IDC / 云业务）' };
     } else if (homeLike && (asnCls === 'isp' || asnCls === 'mobile')) {

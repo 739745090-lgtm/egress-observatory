@@ -85,7 +85,10 @@ test('a residential label inside a hosting ASN is flagged as a conflict', () => 
 
 test('a residential label under a transit / backbone ASN is flagged', () => {
   const result = score(clean({ asn: { asn: 4637, inferred: { cls: 'transit', label: '骨干 / 传输网', hosting: 0.28 } } }));
-  assert.ok(result.categories.find(c => c.id === 'network').items.some(i => i.id === 'asn-transit'));
+  const transit = result.categories.find(c => c.id === 'network').items.find(i => i.id === 'asn-transit');
+  assert.ok(transit, 'expected asn-transit deduction');
+  // Neither side is a datacenter, so this costs far less than an asn-conflict.
+  assert.equal(transit.pts, 1);
 });
 
 test('registration country different from location means broadcast IP', () => {
@@ -174,9 +177,9 @@ test('VPN and proxy flags for the same egress are not counted twice', () => {
 
 test('a lone high fraud score weighs less when many vendors disagree', () => {
   const few = clean();
-  few.sources.ipqs = ok({ ...geo(), flags: f(), risk: 85 });
+  few.sources.abuseipdb = ok({ ...geo(), flags: f(), risk: 85 });
   const many = clean();
-  many.sources.ipqs = ok({ ...geo(), flags: f(), risk: 85 });
+  many.sources.abuseipdb = ok({ ...geo(), flags: f(), risk: 85 });
   for (const id of ['ipapiis', 'ipdata', 'scamalytics']) many.sources[id] = ok({ ...geo(), flags: f(), risk: 0 });
   const riskFew = score(few).checks.risk.value;
   const riskMany = score(many).checks.risk.value;
@@ -186,10 +189,20 @@ test('a lone high fraud score weighs less when many vendors disagree', () => {
 
 test('one high fraud score from a major vendor is not averaged away', () => {
   const evidence = clean();
-  evidence.sources.ipqs = ok({ ...geo(), flags: f(), risk: 85 });
+  evidence.sources.abuseipdb = ok({ ...geo(), flags: f(), risk: 85 });
   const risk = score(evidence).checks.risk.value;
   // Mean alone would be ~33; the blend keeps the worst vendor visible.
   assert.ok(risk >= 50, `risk ${risk}`);
+});
+
+test('an IPQS fraud score weighs less than the same score from AbuseIPDB', () => {
+  const ipqs = clean();
+  ipqs.sources.ipqs = ok({ ...geo(), flags: f(), risk: 85 });
+  const abuse = clean();
+  abuse.sources.abuseipdb = ok({ ...geo(), flags: f(), risk: 85 });
+  const riskIpqs = score(ipqs).checks.risk.value;
+  const riskAbuse = score(abuse).checks.risk.value;
+  assert.ok(riskIpqs < riskAbuse - 5, `${riskIpqs} vs ${riskAbuse}`);
 });
 
 test('missing fields never become negatives', () => {
