@@ -9,8 +9,8 @@
   <meta name="referrer" content="strict-origin-when-cross-origin">
   <title>IP 纯净度检测 · Egress</title>
   <link rel="icon" href="./favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="./styles.css?v=2.7">
-  <script type="module" src="./src/main.js?v=4.13"></script>
+  <link rel="stylesheet" href="./styles.css?v=2.8">
+  <script type="module" src="./src/main.js?v=4.14"></script>
 </head>
 <body>
   <a class="skip-link" href="#main">跳到检测结果</a>
@@ -116,7 +116,7 @@
           <h3>匿名化与滥用</h3>
           <p>Tor 40 · 代理 20 · VPN 18 · 爬虫 8 · 隐私中继 5（均 × E；代理与 VPN 同时命中时较小的一项按一半计）。欺诈 / 风险分 × 0.3（IPQualityScore、Scamalytics、AbuseIPDB、Proxycheck 等）· 滥用标记 10 · DNS 黑名单每个 4–6（上限 20）· 威胁列表最严重者 6–15，每多一个 +2 · OTX 报告 3–10 · VirusTotal 3–12 · StopForumSpam 3–12 · 已知漏洞 6。</p>
           <h3>类型提示（低权重）</h3>
-          <p>机房 15 × E · 租赁地址段 3 · 新 ASN 2 · 家宽标签与机房 ASN 不符 5 × 机房倾向 · 骨干网下的家宽标签 2（骨干网本身可靠，只是标签存疑）· 广播 IP 3 × 不一致的注册信息占比 · 定位分歧 ≤ 5。商业宽带本身不扣分。标签渐变表示证据混合，带 ? 的表示把握不足，悬停可看依据。</p>
+          <p>机房 15 × E · 租赁地址段 3 · 新 ASN 2 · 家宽标签与机房 ASN 不符 5 × 机房倾向 · 骨干网下的家宽标签 1（两边都不是机房，骨干网本身可靠，只是标签存疑）· 广播 IP 3 × 不一致的注册信息占比 · 定位分歧 ≤ 5。商业宽带本身不扣分。标签渐变表示证据混合，带 ? 的表示把握不足，悬停可看依据。</p>
           <h3>连接实测</h3>
           <p>WebRTC 泄漏 15–20 · DNS 泄漏 8、来自中国大陆 12、公共 DNS 跨区 3、EDNS 子网暴露 10 · TCP 指纹像代理转发 10 · IPv6 绕过代理 8 · 时区不符 6 · 多出口 3 · 语言不符 2 · Turnstile 需要验证 8、未通过 15 · reCAPTCHA 低于 0.7 线性扣到 20。</p>
         </div>

@@ -17,6 +17,8 @@ const ICONS = {
 };
 const icon = level => `<span class="ico ico-${level}">${ICONS[level] || ICONS.none}</span>`;
 const flag = code => code ? `<img class="flag" src="https://flagcdn.com/w40/${esc(code.toLowerCase())}.png" alt="" width="20" height="15" loading="lazy" referrerpolicy="no-referrer">` : '';
+/** Shown wherever a value is still on its way from a third-party source, so it never reads as "no data". */
+const WAIT = '<span class="wait">等待第三方返回…</span>';
 const place = (code, city) => code ? `${flag(code)}<span>${city ? `${esc(city)}，` : ''}${esc(countryName(code))}</span>` : '<span class="muted">—</span>';
 const ipSpan = (ip, masked) => `<span class="ipv" data-ip="${esc(ip)}">${esc(masked ? maskIP(ip) : ip)}</span>`;
 // "隐藏 IP" state. Free text that carries addresses (prefixes, neighbours, hostnames, details) goes through ipText,
@@ -229,20 +231,21 @@ export function renderHero(run, result, view) {
   $('verdict').innerHTML = `
     <div class="verdict-head"><span class="verdict-label tone-${g.tone}">${esc(g.label)}</span>
       <span class="confidence c-${result.confidence.level}" tabindex="0" data-tip="评分可信程度&#10;成功来源 ${result.confidence.sources} 个；匿名类字段 ${result.confidence.anonSources} 个来源">置信度${{ high: '高', medium: '中', low: '低' }[result.confidence.level]}</span>
-      ${pending ? `<span class="pending-note">${icon('pending')}还有 ${pending} 个来源在路上</span>` : ''}</div>
+      ${pending ? `<span class="pending-note">${icon('pending')}正在等待 ${pending} 个第三方来源返回，分数可能还会变化</span>` : ''}</div>
     <p class="verdict-text">${esc(result.verdict)}</p>
     ${run.self ? `<p class="score-split"><span>IP 信誉 <b>${result.ipScore}</b></span><span>连接实测 <b class="${result.liveDelta < 0 ? 'neg' : ''}">${result.liveDelta === 0 ? '±0' : result.liveDelta}</b></span><span>综合 <b>${result.score}</b></span></p>`
       : '<p class="score-split muted">查询的不是本机出口，只计算 IP 信誉，连接实测不适用。<button type="button" class="link-btn" data-self-check>改测本机出口 →</button></p>'}
     <ul class="deductions">${issues.map(item => `<li tabindex="0" data-tip="${esc(item.detail || '')}"><span class="dot"></span><b>−${fmt(item.pts)}</b> ${esc(item.label)}</li>`).join('')}${result.bonus.items.slice(0, 3).map(item => `<li class="plus" tabindex="0" data-tip="${esc(item.detail || '')}"><span class="dot"></span><b>+${fmt(item.pts)}</b> ${esc(item.label)}</li>`).join('')}${!issues.length && !result.bonus.items.length ? '<li class="clean"><b>0</b> 没有扣分项</li>' : ''}</ul>`;
   const s = result.summary;
+  const orWait = (has, html) => has || !pending ? html : WAIT;
   $('addr').innerHTML = `
     <div class="addr-row"><dt>IP</dt><dd>${ipSpan(run.ip, view.masked)} <span class="tag">IPv${run.v}</span>${run.self ? '<span class="tag tag-self">你的出口</span>' : ''}</dd></div>
-    <div class="addr-row"><dt>位置</dt><dd>${place(s.country, s.city)}</dd></div>
-    <div class="addr-row"><dt>所属网络</dt><dd>${asnLink(s.asn)} <span class="muted">${esc(s.org || '')}</span></dd></div>
-    <div class="addr-row"><dt>类型</dt><dd>${typeTag(result)} ${nativeTag(result)} ${leaseTag(result)}</dd></div>
-    <div class="addr-row"><dt>运营商类型</dt><dd>${asnTag(run)}${run.asnProfile?.pdb?.type ? ` <span class="muted small">PeeringDB：${esc(run.asnProfile.pdb.type)}</span>` : ''}</dd></div>
-    <div class="addr-row"><dt>主机名</dt><dd class="mono">${s.hostname ? ipText(s.hostname) : '–'}</dd></div>
-    <div class="addr-row"><dt>时区</dt><dd>${esc(s.ipTimezone || '—')} <span class="muted">${s.ipOffset === null || s.ipOffset === undefined ? '' : formatOffset(s.ipOffset)}</span></dd></div>`;
+    <div class="addr-row"><dt>位置</dt><dd>${orWait(s.country, place(s.country, s.city))}</dd></div>
+    <div class="addr-row"><dt>所属网络</dt><dd>${orWait(s.asn, `${asnLink(s.asn)} <span class="muted">${esc(s.org || '')}</span>`)}</dd></div>
+    <div class="addr-row"><dt>类型</dt><dd>${orWait(result.checks.type.value, `${typeTag(result)} ${nativeTag(result)} ${leaseTag(result)}`)}</dd></div>
+    <div class="addr-row"><dt>运营商类型</dt><dd>${orWait(run.asnProfile, asnTag(run))}${run.asnProfile?.pdb?.type ? ` <span class="muted small">PeeringDB：${esc(run.asnProfile.pdb.type)}</span>` : ''}</dd></div>
+    <div class="addr-row"><dt>主机名</dt><dd class="mono">${s.hostname ? ipText(s.hostname) : orWait(false, '–')}</dd></div>
+    <div class="addr-row"><dt>时区</dt><dd>${orWait(s.ipTimezone, esc(s.ipTimezone || '—'))} <span class="muted">${s.ipOffset === null || s.ipOffset === undefined ? '' : formatOffset(s.ipOffset)}</span></dd></div>`;
 }
 
 export function renderEgress(egress, run, view) {
@@ -252,7 +255,7 @@ export function renderEgress(egress, run, view) {
     const target = run && item.ip && run.ip === item.ip;
     return `<li class="${target ? 'is-target' : ''}">
       <span class="eg-name">${esc(item.name)}</span>
-      ${item.status === 'pending' ? `<span class="muted">${icon('pending')}</span>` : item.ip ? `<button type="button" class="eg-ip" data-check="${esc(item.ip)}" title="检测这个 IP">${ipSpan(item.ip, view.masked)}</button>` : '<span class="muted">无响应</span>'}
+      ${item.status === 'pending' ? `<span class="muted">${icon('pending')}等待返回</span>` : item.ip ? `<button type="button" class="eg-ip" data-check="${esc(item.ip)}" title="检测这个 IP">${ipSpan(item.ip, view.masked)}</button>` : '<span class="muted">无响应</span>'}
     </li>`;
   }).join('');
   const note = egress.split ? `<p class="eg-note warn">${icon('warn')}${esc(egress.summary)}</p>`
@@ -275,7 +278,7 @@ function gauge(value, { low = '高危', high = '可信', label = '' } = {}) {
 function tile({ label, level, value, sub, pts, title, wide = false }) {
   return `<div class="tile lv-${level}${pts >= 1 ? ' has-pen' : ''}${wide ? ' tile-wide' : ''}" ${title ? `tabindex="0" data-tip="${esc(title)}"` : ''}>
     <div class="tile-head">${icon(level)}<span class="tile-label">${esc(label)}</span>${pen(pts)}</div>
-    <div class="tile-value">${value}${sub ? ` <small>${sub}</small>` : ''}</div>
+    <div class="tile-value">${level === 'pending' && value === '—' ? WAIT : value}${sub ? ` <small>${sub}</small>` : ''}</div>
   </div>`;
 }
 
@@ -337,7 +340,7 @@ function botTile(run, result) {
   const radar = run.asnProfile?.sources?.radar;
   const asn = run.asnProfile?.asn ? `AS${run.asnProfile.asn}` : 'ASN';
   if (b.bot === null) {
-    const value = !run.asnProfile ? '检测中' : radar === 'skip' ? '未配置' : run.asnProfile.radarNoData ? '无数据' : '查询失败';
+    const value = !run.asnProfile ? WAIT : radar === 'skip' ? '未配置' : run.asnProfile.radarNoData ? '无数据' : '查询失败';
     const title = radar === 'skip' ? '人机流量需要后端配置 CF_RADAR_TOKEN（Cloudflare Radar 只读 token）后才能查询'
       : radar === 'error' ? run.asnProfile.radarError || `Cloudflare Radar 查询 ${asn} 失败，请重新检测` : '';
     return { label: '人机流量', level: run.asnProfile ? 'none' : 'pending', value, sub: 'Cloudflare Radar', title, wide: true };
@@ -510,7 +513,7 @@ const UT_TIP = {
 };
 
 function typeCell(record, field, id) {
-  if (!record || record.status === 'pending') return `<span class="ut ut-pending">${icon('pending')}</span>`;
+  if (!record || record.status === 'pending') return `<span class="ut ut-pending">${icon('pending')}等待返回</span>`;
   if (record.status === 'skip') return `<span class="ut ut-off" tabindex="0" data-tip="${esc(record.webLookup?.error || '需要在后端配置该数据库的 API key')}">${record.webLookup ? '网页受限' : '未配置'}</span>`;
   if (record.status !== 'ok') return `<span class="ut ut-off" tabindex="0" data-tip="${esc(record.error || '请求失败')}">失败</span>`;
   if (field === 'companyType' && !GIVES_COMPANY.has(id) && !record.data.companyType) return '<span class="muted">—</span>';
@@ -599,7 +602,7 @@ function chip({ name, site, status, value, ms, error, listed, note }) {
   const level = status === 'pending' ? 'pending' : status === 'skip' ? 'none' : status !== 'ok' ? 'off' : listed ? 'bad' : 'good';
   return `<a class="src src-${level}" href="${esc(site)}" target="_blank" rel="noopener noreferrer" data-tip="${esc([name, error || value || '', note || '', '点击打开该来源的查询页'].filter(Boolean).join('\n'))}">
     <span class="src-name">${level === 'pending' ? icon('pending') : ''}${esc(name)}</span>
-    <span class="src-val">${status === 'ok' ? ipText(value || '✓') : status === 'pending' ? '查询中' : esc(error || '不可用')}</span>
+    <span class="src-val">${status === 'ok' ? ipText(value || '✓') : status === 'pending' ? '等待返回' : esc(error || '不可用')}</span>
     ${status === 'ok' && typeof ms === 'number' ? `<span class="src-ms">${ms} ms</span>` : ''}
   </a>`;
 }
