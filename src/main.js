@@ -1,4 +1,4 @@
-import { readIPinfoPage, mergeIPinfoPage } from './ipinfo-page.js?v=2.6';
+import { readIPinfoPage, mergeIPinfoPage } from './ipinfo-page.js?v=3.4';
 import { setupImport, supplementTypes, readReport } from './ipsuper.js?v=3.1';
 /** Orchestration: detect the egress, fan out every check, rescore as results arrive. */
 import { API_BASE } from '../config.js';
@@ -211,16 +211,29 @@ async function startRun(input, fetchPages = false) {
   const pageStatus = $('auto-page-status');
   pageStatus.textContent = '';
   if (fetchPages) {
-    pageStatus.textContent = '正在读取 IPSuper 网页…';
-    fetch('http://127.0.0.1:4188/lookup/ipsuper', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ip:parsed.ip}),signal:AbortSignal.any([signal,AbortSignal.timeout(80000)])})
-      .then(async response => {
-        const report = await response.json();
-        if (!response.ok) throw Error(report.error || '网页查询失败');
-        if (!alive()) return;
-        webTypes = readReport(report, parsed.ip);
-        refreshTypes(); scheduleRender();
-        pageStatus.textContent = 'IPSuper 网页已返回，已按数据库补全可用字段。';
-      }).catch(error => { if (alive()) pageStatus.textContent = error instanceof TypeError ? '本机网页读取服务不可达，请打开项目的「启动网站.cmd」。' : error.message; });
+    const statuses = {ipinfo:'IPinfo 查询中', ipsuper:'IPSuper 查询中'};
+    pageStatus.textContent = Object.values(statuses).join(' · ');
+    for (const provider of Object.keys(statuses)) {
+      const name = provider === 'ipinfo' ? 'IPinfo' : 'IPSuper';
+      fetch('http://127.0.0.1:4188/lookup/' + provider, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ip:parsed.ip}),signal:AbortSignal.any([signal,AbortSignal.timeout(80000)])})
+        .then(async response => {
+          const report = await response.json();
+          if (!response.ok) throw Error(report.error || '网页查询失败');
+          if (!alive()) return;
+          if (!sameIP(report.ip, parsed.ip)) throw Error('返回的 IP 不匹配');
+          if (provider === 'ipinfo') {
+            run.ipinfoPage = readIPinfoPage(report.text, parsed.ip);
+            const d = run.ipinfoPage;
+            statuses.ipinfo = ['IPinfo 网页已读取', d.companyName, d.asnType && 'ASN 类型 '+d.asnType,
+              typeof d.flags.hosting === 'boolean' && (d.flags.hosting ? '机房检出' : '机房未检出')].filter(Boolean).join(' · ');
+          } else {
+            webTypes = readReport(report, parsed.ip);
+            statuses.ipsuper = 'IPSuper 网页已读取';
+          }
+          refreshTypes(); scheduleRender();
+        }).catch(error => {statuses[provider] = name+'：'+(error instanceof TypeError ? '请启动本机网页读取服务' : error.message);})
+        .finally(() => { if (alive()) pageStatus.textContent = Object.values(statuses).join(' ｜ '); });
+    }
   }
   const tasks = [];
   for (const source of active) {

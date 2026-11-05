@@ -11,11 +11,11 @@ from urllib.parse import urlsplit
 ROOT = Path(__file__).resolve().parent
 LOCAL = "http://127.0.0.1:4187"
 ORIGINS = {LOCAL, "http://localhost:4187", "https://blackslience-reaper.github.io"}
-LOCK = threading.Lock()
-CACHE = {}
+LOCKS = {name: threading.Lock() for name in ("ipsuper", "ipinfo")}
+CACHES = {name: {} for name in LOCKS}
 
 
-def lookup(ip):
+def lookup(ip, provider):
     from playwright.sync_api import sync_playwright
     with sync_playwright() as api:
         options = {"headless": True}
@@ -24,6 +24,13 @@ def lookup(ip):
         browser = api.chromium.launch(**options)
         try:
             page = browser.new_page()
+            if provider == "ipinfo":
+                response = page.goto("https://ipinfo.io/" + ip, wait_until="domcontentloaded", timeout=30000)
+                if not response or response.status != 200 or urlsplit(page.url).hostname != "ipinfo.io":
+                    raise ValueError("IPinfo detail unavailable")
+                page.get_by_text("Summary", exact=True).first.wait_for(state="attached", timeout=10000)
+                raw = page.locator("body").inner_text().split("Table of Contents")[0]
+                return {"ip": ip, "text": raw[:120000], "time": int(time.time()*1000)}
             page.goto("https://ipsuper.com/?ip=" + ip, wait_until="domcontentloaded", timeout=30000)
             page.wait_for_function("""ip => {
               const targetShown = [...document.querySelectorAll('a[href]')].some(a => a.textContent.trim() === ip && new URL(a.href, location.href).searchParams.get('ip') === ip);
@@ -45,7 +52,7 @@ def lookup(ip):
             }""")
         except Exception:
             if page:
-                print("IPSuper page:", page.title(), flush=True)
+                print(provider, page.title(), flush=True)
             raise
         finally:
             browser.close()
@@ -69,7 +76,7 @@ class Handler(SimpleHTTPRequestHandler):
         self.reply(200 if self.headers.get("Origin") in ORIGINS else 403, {})
 
     def do_POST(self):
-        if (self.path != "/lookup/ipsuper" or self.headers.get("Origin") not in ORIGINS
+        if (self.path not in {"/lookup/ipsuper","/lookup/ipinfo"} or self.headers.get("Origin") not in ORIGINS
             or self.headers.get("Host") not in {"127.0.0.1:4188","localhost:4188"}
             or self.headers.get_content_type() != "application/json"):
             return self.reply(403, {})
@@ -81,21 +88,24 @@ class Handler(SimpleHTTPRequestHandler):
         except (TypeError, ValueError, KeyError):
             return self.reply(400, {})
         ip = str(ip)
-        if not LOCK.acquire(timeout=2):
+        provider = self.path.rsplit("/",1)[1]
+        lock = LOCKS[provider]
+        cache = CACHES[provider]
+        if not lock.acquire(timeout=2):
             return self.reply(429, {"error":"上一轮网页查询仍在运行"})
         try:
-            result = CACHE.get(ip)
+            result = cache.get(ip)
             if not result or time.time()*1000-result["time"] > 600000:
-                result = lookup(ip)
+                result = lookup(ip, provider)
                 if result["ip"] != ip: raise ValueError()
-                if len(CACHE) >= 128: CACHE.pop(next(iter(CACHE)))
-                CACHE[ip] = result
+                if len(cache) >= 128: cache.pop(next(iter(cache)))
+                cache[ip] = result
             self.reply(200,result)
         except Exception as exc:
-            print("IPSuper:", type(exc).__name__, flush=True)
-            self.reply(502, {"error":"IPSuper 网页未返回完整类型表"})
+            print(provider, type(exc).__name__, flush=True)
+            self.reply(502, {"error":provider + " 网页未返回可读取的报告"})
         finally:
-            LOCK.release()
+            lock.release()
 
     def do_GET(self):
         path = urlsplit(self.path).path

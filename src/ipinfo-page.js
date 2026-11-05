@@ -30,6 +30,10 @@ export function readIPinfoPage(raw, target) {
     data.lon = Number(coordinates[3]) * (coordinates[4] === 'W' ? -1 : 1);
   }
   if (flags.resProxy !== undefined) { data.resProxy = flags.resProxy; delete flags.resProxy; }
+  const normalizeType = value => ({isp:'residential', residential:'residential', hosting:'hosting', business:'business', mobile:'mobile', education:'education', government:'government'})[value?.toLowerCase()];
+  data.companyType = normalizeType(field('Company Type'));
+  data.usageType = normalizeType(field('Usage Type'));
+  if (data.usageType) data.type = data.usageType;
   if (flags.hosting === true) data.usageType = data.type = 'hosting';
   if (!Object.keys(flags).length && !companyName && !asnType) throw Error('未识别到 IPinfo 摘要字段。');
   return data;
@@ -42,6 +46,6 @@ export function mergeIPinfoPage(record, imported) {
     if (key !== 'flags' && value != null) data[key] ??= value;
   }
   for (const [key,value] of Object.entries(imported.flags)) data.flags[key] ??= value;
-  data.sourceNote = 'IPinfo 直查及本人导入的 IPinfo 网页，同库合并。';
+  data.sourceNote = 'IPinfo 接口与目标 IP 的网页字段，同库合并。';
   return {...record,status:'ok',data,error:null};
 }

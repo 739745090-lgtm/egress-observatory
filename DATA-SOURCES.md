@@ -34,12 +34,13 @@
 
 ## 未自动抓取的页面
 
-IPinfo、Scamalytics、IPPure 等网页可显示更多信息，但公开条款对自动抓取或数据再分发有明确限制。本站保留已有官方 API 或查询链接，未用网页抓取、借用他人密钥、轮换出口或绕过验证码来替代授权接口。
+Scamalytics、IPPure 等网页可显示更多信息，但公开条款对自动抓取或数据再分发有明确限制。本站保留已有官方 API 或查询链接，未用网页抓取、借用他人密钥、轮换出口或绕过验证码来替代授权接口。
 
-- [IPinfo 条款](https://ipinfo.io/terms-of-service)
 - [Scamalytics 条款](https://scamalytics.com/terms-of-service/)
 - [IPPure 条款](https://ippure.com/en/terms-privacy)
 
 ## Net.Coffee 的底层来源
 
 目标查询响应（`https://ip.net.coffee/api/ip/lookup/<IP>`）的 `geo_sources` 为地理观察。抽样查询返回 g1、g2、g3、g7；[页面脚本](https://ip.net.coffee/ip/ip-page.js?v=20260910d)按 g1、g7、g3、g2 排序。公开响应和显示逻辑没有给出这些代码与具体厂商的对应关系。company_type、isResidential、is_datacenter 是顶层汇总字段，没有逐库标签。本站保留各来源代号，只在旁证区展示，不参与数据库类型或定位投票。[官方卡片说明](https://card.net.coffee/)披露的资料包括 BGP、反向 DNS、WHOIS 和历史滥用记录。
+
+本机查询服务支持在授权范围内按单个目标读取 IPinfo 详情页。结果仅回到发起查询的页面，网页与接口按 IPinfo 同库合并。
