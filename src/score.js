@@ -397,7 +397,11 @@ export function score(evidence) {
     add('abuse', 'sfs', '垃圾注册记录', Math.min(12, 3 + 9 * (sfs.confidence || 0) / 100 + (recent ? 2 : 0)), `StopForumSpam 记录 ${sfs.appears} 次${sfs.lastseen ? `，最近 ${sfs.lastseen.slice(0, 10)}` : ''}`);
   }
   const shodan = sources.find(source => source.id === 'shodan');
-  if (shodan?.vulns?.length) add('abuse', 'vulns', '存在已知漏洞', 6, `${shodan.vulns.length} 个 CVE，可能被入侵后用作跳板`);
+  if (shodan?.vulns?.length) {
+    // Shodan matches the software versions in the banners it saw against CVE data: likely, not verified.
+    const cves = [...shodan.vulns].sort((a, b) => b.localeCompare(a, 'en', { numeric: true }));
+    add('abuse', 'vulns', '存在已知漏洞', 6, `${cves.length} 个 CVE：${cves.slice(0, 6).join('、')}${cves.length > 6 ? ' 等' : ''}。Shodan 按开放端口上的软件版本推断，未实际验证；主机若被入侵，可能被用作跳板`);
+  }
 
   // ---------- live connection (only when the target is the visitor's own egress) ----------
   const probes = evidence.self ? evidence.probes || {} : {};

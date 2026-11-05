@@ -91,6 +91,16 @@ test('a residential label under a transit / backbone ASN is flagged but not dedu
   assert.equal(result.categories.find(c => c.id === 'network').items.length, 0);
 });
 
+test('Shodan CVEs are listed by ID, newest first, in the vulnerability detail', () => {
+  const evidence = clean();
+  const vulns = ['CVE-2015-4000', 'CVE-2023-48795', 'CVE-2018-15473', 'CVE-2016-0777', 'CVE-2019-6111', 'CVE-2020-15778', 'CVE-2021-41617'];
+  evidence.sources.shodan = ok({ ports: [22], tags: [], vulns, hostnames: [], geoVote: false });
+  const item = score(evidence).categories.find(c => c.id === 'abuse').items.find(i => i.id === 'vulns');
+  assert.equal(item.pts, 6);
+  assert.ok(item.detail.startsWith('7 个 CVE：CVE-2023-48795、CVE-2021-41617、CVE-2020-15778、CVE-2019-6111、CVE-2018-15473、CVE-2016-0777 等。'), item.detail);
+  assert.ok(!item.detail.includes('CVE-2015-4000'));
+});
+
 test('registration country different from location means broadcast IP', () => {
   const evidence = clean();
   evidence.sources.ipleak = ok({ ...geo(), regCountry: 'FR' });

@@ -2,7 +2,7 @@
 import { esc, countryName, maskIP, maskText, formatOffset, zoneOffset } from './util.js?v=4.1';
 import { SOURCES } from './sources.js?v=3.2';
 import { DNSBLS, CIDR_LISTS } from './blocklists.js';
-import { CATEGORIES, TYPE_LABEL } from './score.js?v=4.5';
+import { CATEGORIES, TYPE_LABEL } from './score.js?v=4.6';
 import { captchaConfig } from './captcha.js';
 
 const $ = id => document.getElementById(id);
@@ -580,7 +580,7 @@ function sourceValue(id, d) {
     case 'riperir': return `分配地 ${d.regCountry || '—'}`;
     case 'ripeprefix': return d.announced ? `${d.prefix || ''}` : '未宣告';
     case 'ipguide': return `${d.prefix || ''}${d.rir ? ` · ${d.rir}` : ''}`;
-    case 'shodan': return d.unseen ? '未被扫描' : d.ports.length ? `${d.tags.join(' ') || '端口'} ${d.ports.slice(0, 3).join(', ')}` : '无开放端口';
+    case 'shodan': return d.unseen ? '未被扫描' : (d.ports.length ? `${d.tags.join(' ') || '端口'} ${d.ports.slice(0, 3).join(', ')}` : '无开放端口') + (d.vulns?.length ? ` · ${d.vulns.length} 个 CVE` : '');
     case 'sfs': return d.appears ? `记录 ${d.appears} 次` : '无记录';
     case 'onionoo': return d.flags.tor ? 'Tor 出口' : d.torRelay ? 'Tor 中继（非出口）' : '不在 Tor 列表';
     case 'ptr': return d.hostname || '无 PTR';

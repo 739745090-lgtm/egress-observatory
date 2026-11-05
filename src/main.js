@@ -11,8 +11,8 @@ import { DNSBLS, checkDNSBL, CIDR_LISTS, checkCIDRList, asnAbuseDensity } from '
 import { fetchASN, inferASN, detectLease } from './asn.js?v=4.3';
 import { detectEgress, summarizeEgress, probeWebRTC, probeDNS, classifyDNS, probeTCP, probeEnvironment, probeIPv6, classifyIPv6, traceProbe } from './probes.js';
 import { runTurnstile, runRecaptcha } from './captcha.js?v=4.2';
-import { score } from './score.js?v=4.5';
-import * as view from './render.js?v=4.12';
+import { score } from './score.js?v=4.6';
+import * as view from './render.js?v=4.13';
 
 const $ = id => document.getElementById(id);
 const app = {

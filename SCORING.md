@@ -97,7 +97,7 @@ E = H ÷ (H + N)                                     扣分 = 该项满分 × E
 
 **匿名化**：Tor 40 · 代理 26（含住宅代理）· VPN 24 · 爬虫 8 · 隐私中继 5 · 多设备共用出口 3–5（均 × E）。代理和 VPN 通常说的是同一个匿名出口，两者都有时较大的一项全额、另一项按一半计。
 
-**滥用与黑名单**：欺诈 / 风险分 × 0.3 · 滥用标记 10 × E · DNS 黑名单每个邮件类 4、滥用类 6（上限 20）· 威胁列表：最严重的一个全额（FireHOL L1 15、CyberCrime 15、FireHOL L2 10、blocklist.de 10、ET 已入侵 10、IPsum ≥3 黑名单 8、GreenSnow 8、CINS 8、FireHOL L3 6、BotScout 6），每多一个列表 +2 · AlienVault OTX 报告提及 1–2 / 3–9 / ≥10 份扣 3 / 6 / 10（白名单指标不计）· VirusTotal 1 / 2–4 / ≥5 家判恶意扣 3 / 8 / 12 · StopForumSpam 3 + 9 × 置信度，近 90 天另加 2（上限 12）· Shodan 已知漏洞 6。
+**滥用与黑名单**：欺诈 / 风险分 × 0.3 · 滥用标记 10 × E · DNS 黑名单每个邮件类 4、滥用类 6（上限 20）· 威胁列表：最严重的一个全额（FireHOL L1 15、CyberCrime 15、FireHOL L2 10、blocklist.de 10、ET 已入侵 10、IPsum ≥3 黑名单 8、GreenSnow 8、CINS 8、FireHOL L3 6、BotScout 6），每多一个列表 +2 · AlienVault OTX 报告提及 1–2 / 3–9 / ≥10 份扣 3 / 6 / 10（白名单指标不计）· VirusTotal 1 / 2–4 / ≥5 家判恶意扣 3 / 8 / 12 · StopForumSpam 3 + 9 × 置信度，近 90 天另加 2（上限 12）· Shodan 已知漏洞 6（Shodan 按开放端口上的软件版本推断的 CVE，未实际验证；明细列出编号）。
 
 **邻居与 ASN 信誉**
 
