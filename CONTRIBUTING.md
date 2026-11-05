@@ -39,7 +39,7 @@ git branch -d 12-short-description
 
 `git branch -d` 可能因为 squash 合并提示分支未合并；确认 PR 已合并后，可以换成 `git branch -D`。
 
-### 在两台电脑之间切换
+### 多端开发
 
 离开前把分支推上去，到另一台电脑继续：
 
