@@ -7,6 +7,8 @@
 | 路由 | 方法 | 需要 | 说明 |
 | --- | --- | --- | --- |
 | `/health` | GET | — | 返回 `apiVersion` 与已启用的 `routes`，前端据此决定调用哪些来源 |
+| `/v1/page/ipinfo?ip=` | GET | — | 唤醒网页查询容器并读取目标 IP 的 IPinfo 摘要；按 IP 合并并发请求、缓存成功报告 |
+| `/v1/page/ipsuper?ip=` | GET | — | 读取目标 IP 的 IPSuper 类型表及逐库风险百分比，保留原始观察时间 |
 | `/v1/proxycheck?ip=` | GET | `PROXYCHECK_API_KEY` | VPN、代理、Tor、机房、风险分、入侵 / 爬虫标记、设备估计 |
 | `/v1/ipapi?ip=` | GET | — | ip-api.com（免费接口只有 HTTP，浏览器无法直连）：代理、机房、移动 |
 | `/v1/ip2location?ip=` | GET | `IP2LOCATION_API_KEY`（建议） | IP2Location.io；免密钥额度按调用 IP 计算，托管出口共享会被用光，配置免费账号 key（每月 5 万次）后按账号计；套餐含 `usage_type` 时提供使用 / 公司类型 |

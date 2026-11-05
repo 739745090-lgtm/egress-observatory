@@ -22,6 +22,7 @@ def lookup(ip, provider):
         if not Path(api.chromium.executable_path).exists():
             options["channel"] = "chrome"
         browser = api.chromium.launch(**options)
+        page = None
         try:
             page = browser.new_page(locale="zh-CN")
             if provider == "ipinfo":
@@ -40,7 +41,7 @@ def lookup(ip, provider):
                 && ([...grid.querySelectorAll('.grid-cell')].some(c => /家宽|机房|商业|移动|教育|政府/.test(c.innerText)) || document.querySelector('.risk-scores .right-label[title]'))
                 ;
             }""", arg=ip, timeout=60000)
-            return page.locator(".attributes-grid").filter(has_text="公司类型").first.evaluate("""grid => {
+            return page.locator(".attributes-grid").filter(has_text="公司类型").first.evaluate(r"""grid => {
               const headers = [...grid.querySelectorAll(':scope > .grid-header')].slice(1).map(n=>n.innerText.trim());
               const rows = {};
               for(const label of grid.querySelectorAll(':scope > .grid-label')) {
@@ -59,11 +60,12 @@ def lookup(ip, provider):
               return {headers,rows,riskPercent,ip:new URL(location.href).searchParams.get('ip'),time:Date.now()};
             }""")
         except Exception:
-            if page:
-                print(provider, page.title(), "grids", page.locator(".attributes-grid").count(),
-                      "risk_rows", page.locator(".risk-scores .info-row").count(), flush=True)
-                if provider == "ipsuper" and page.locator(".attributes-grid").count():
-                    print("type grid:", page.locator(".attributes-grid").first.inner_text()[:350], flush=True)
+            # A crashed/closed browser must not replace the original error during cleanup.
+            if page and not page.is_closed():
+                try:
+                    print(provider, "page report unavailable", flush=True)
+                except Exception:
+                    pass
             raise
         finally:
             browser.close()
@@ -77,6 +79,7 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
             self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.send_header("Access-Control-Expose-Headers", "Retry-After")
             self.send_header("Access-Control-Allow-Private-Network", "true")
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
@@ -120,6 +123,8 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         path = urlsplit(self.path).path
+        if path == "/health":
+            return self.reply(200, {"status": "ok", "providers": ["ipinfo", "ipsuper"]})
         allowed = {"/","/index.html","/config.js","/styles.css","/favicon.svg"}
         if path not in allowed and path not in {"/src/"+p.name for p in (ROOT/"src").glob("*.js")}:
             return self.send_error(404)

@@ -2,7 +2,8 @@ import { lookupIPOK, lookupDBIPWeb, fillSource } from './supplements.js?v=2';
 import { readIPinfoPage, mergeIPinfoPage } from './ipinfo-page.js?v=3.4';
 import { setupImport, supplementTypes, readReport } from './ipsuper.js?v=3.1';
 /** Orchestration: detect the egress, fan out every check, rescore as results arrive. */
-import { API_BASE, PAGE_LOOKUP_BASE, PAGE_LOOKUP_CLOUD } from '../config.js?v=cloud1';
+import { API_BASE, PAGE_LOOKUP_CLOUD } from '../config.js?v=cloud2';
+import { lookupPage } from './page-lookups.js?v=1';
 import { getJSON, parseIP, isPublicIP, sameIP, maskIP, maskText } from './util.js?v=4.1';
 import { SOURCES, runSource } from './sources.js?v=3.2';
 import { DNSBLS, checkDNSBL, CIDR_LISTS, checkCIDRList, asnAbuseDensity } from './blocklists.js';
@@ -255,10 +256,12 @@ async function startRun(input, fetchPages = true) {
     pageStatus.textContent = Object.values(statuses).join(' · ');
     for (const provider of Object.keys(statuses)) {
       const name = provider === 'ipinfo' ? 'IPinfo' : 'IPSuper';
-      fetch(PAGE_LOOKUP_BASE + '/lookup/' + provider, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ip:parsed.ip}),signal:AbortSignal.any([signal,AbortSignal.timeout(150000)])})
-        .then(async response => {
-          const report = await response.json();
-          if (!response.ok) throw Error(report.error || '网页查询失败');
+      lookupPage(provider, parsed.ip, signal, message => {
+        if (!alive()) return;
+        statuses[provider] = name + '：' + message;
+        pageStatus.textContent = Object.values(statuses).join(' ｜ ');
+      })
+        .then(report => {
           if (!alive()) return;
           if (!sameIP(report.ip, parsed.ip)) throw Error('返回的 IP 不匹配');
           if (provider === 'ipinfo') {
@@ -273,7 +276,7 @@ async function startRun(input, fetchPages = true) {
             statuses.ipsuper = 'IPSuper 网页已读取';
           }
           refreshTypes(); scheduleRender();
-        }).catch(error => {statuses[provider] = name+'：'+(error instanceof TypeError ? '线上网页查询服务连接失败' : error.message);})
+        }).catch(error => { if (alive()) statuses[provider] = name+'：'+error.message; })
         .finally(() => { if (alive()) pageStatus.textContent = Object.values(statuses).join(' ｜ '); });
     }
   }

@@ -5,7 +5,7 @@
  */
 const DEFAULT_ORIGIN = 'https://blackslience-reaper.github.io';
 const DEV_ORIGINS = new Set(['http://127.0.0.1:4187', 'http://localhost:4187']);
-const API_VERSION = 3;
+const API_VERSION = 4;
 const CACHE_SECONDS = 600;
 const RATE_WINDOW_MS = 60_000;
 const RATE_LIMIT = 30;
@@ -15,6 +15,10 @@ const callers = new Map();
 // Small free quotas: keep their answers longer.
 const CACHE_FOR = Object.freeze({ ipqs: 6 * 3600, abuseipdb: 3600, ipregistry: 6 * 3600, ipdata: 3600, greynoise: 6 * 3600, crowdsec: 6 * 3600, getipintel: 6 * 3600, scamalytics: 6 * 3600, virustotal: 6 * 3600 });
 let lastSweep = 0;
+const PAGE_SERVICE = 'https://egress-observatory-lookup.onrender.com';
+const pageRequests = new Map();
+let pageWarmup = null;
+let pageWarmUntil = 0;
 
 const LOOKUPS = Object.freeze({
   '/v1/proxycheck': 'proxycheck', '/v1/dbip': 'dbip', '/v1/ip2location': 'ip2location', '/v1/ipapi': 'ipapi', '/v1/abuseipdb': 'abuseipdb', '/v1/ipqs': 'ipqs', '/v1/ipinfo': 'ipinfo', '/v1/ipregistry': 'ipregistry', '/v1/ipdata': 'ipdata',
@@ -111,7 +115,7 @@ function failure(status, code, message, origin, extra = {}) {
 }
 
 function enabledRoutes(env) {
-  const routes = ['dbip', 'ip2location', 'ipapi'];
+  const routes = ['dbip', 'ip2location', 'ipapi', 'page-ipinfo', 'page-ipsuper'];
   if (secret(env.PROXYCHECK_API_KEY)) routes.unshift('proxycheck');
   if (secret(env.ABUSEIPDB_API_KEY)) routes.push('abuseipdb');
   if (secret(env.IPQS_API_KEY)) routes.push('ipqs');
@@ -614,6 +618,80 @@ async function writeCache(key, body, ctx, seconds = CACHE_SECONDS) {
   if (ctx?.waitUntil) ctx.waitUntil(write); else await write;
 }
 
+// ---------- browser report relay ----------
+
+async function warmPageService() {
+  if (Date.now() < pageWarmUntil) return;
+  if (!pageWarmup) {
+    pageWarmup = (async () => {
+      const response = await fetch(`${PAGE_SERVICE}/health`, { redirect: 'error', signal: AbortSignal.timeout(75000) });
+      if (!response.ok || (await response.json()).status !== 'ok') throw Error('page-service-unavailable');
+      pageWarmUntil = Date.now() + 60000;
+    })().finally(() => { pageWarmup = null; });
+  }
+  await pageWarmup;
+}
+
+async function fetchPageReport(provider, ip) {
+  try {
+    await warmPageService();
+    const response = await fetch(`${PAGE_SERVICE}/lookup/${provider}`, {
+      method: 'POST', redirect: 'error',
+      headers: { 'Content-Type': 'application/json', Origin: DEFAULT_ORIGIN },
+      body: JSON.stringify({ ip }), signal: AbortSignal.timeout(110000),
+    });
+    if (!response.ok) {
+      const status = response.status === 429 ? 429 : response.status >= 500 ? 503 : 502;
+      return { error: { status, code: 'page-service-unavailable',
+        message: status === 429 ? '网页查询服务正在处理其他请求，请稍后重试。' : '网页查询服务暂时不可用，请稍后重试。',
+        after: Math.min(15, Math.max(1, Number(response.headers.get('Retry-After')) || 3)) } };
+    }
+    const report = await response.json();
+    if (canonicalIP(report.ip) !== ip || !Number.isFinite(report.time) || Math.abs(Date.now() - report.time) > 600000) throw Error('page-target-or-time');
+    let body;
+    if (provider === 'ipinfo') {
+      if (typeof report.text !== 'string' || report.text.length > 120000 || !report.text.includes('Summary')) throw Error('page-schema');
+      body = { ip, time: report.time, text: report.text };
+    } else {
+      if (!Array.isArray(report.headers) || !report.headers.length || report.headers.length > 20
+        || report.headers.some(name => typeof name !== 'string' || name.length > 80)) throw Error('page-schema');
+      const rows = {};
+      for (const name of ['使用类型', '公司类型']) {
+        const row = report.rows?.[name];
+        if (!Array.isArray(row) || row.length !== report.headers.length || row.some(value => typeof value !== 'string' || value.length > 80)) throw Error('page-schema');
+        rows[name] = row;
+      }
+      const riskPercent = Object.fromEntries(Object.entries(report.riskPercent || {}).filter(([name, value]) => name.length <= 80 && typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100));
+      body = { ip, time: report.time, headers: report.headers, rows, riskPercent };
+    }
+    return { body };
+  } catch (error) {
+    const timeout = error.name === 'TimeoutError';
+    return { error: { status: 503, code: timeout ? 'page-timeout' : 'page-service-unavailable',
+      message: timeout ? '网页服务启动或查询超时，请稍后重试。' : '网页服务连接或报告读取失败，请稍后重试。', after: 3 } };
+  }
+}
+
+async function pageLookup(provider, ip, url, origin, ctx) {
+  const cacheKey = new Request(new URL(`/__egress_cache/page-${provider}-v1/${encodeURIComponent(ip)}`, url.origin));
+  const cached = await readCache(cacheKey);
+  if (cached?.ip === ip && Date.now() - cached.time < 600000) return json({ ...cached, cacheHit: true }, 200, origin, { 'X-Data-Cache': 'HIT' });
+  const key = `${provider}:${ip}`;
+  let pending = pageRequests.get(key);
+  if (!pending) {
+    if (pageRequests.size >= 32) return failure(503, 'page-service-busy', '网页查询服务繁忙，请稍后重试。', origin, { retryAfterSeconds: 5 });
+    pending = (async () => {
+      const result = await fetchPageReport(provider, ip);
+      if (result.body) await writeCache(cacheKey, result.body, ctx, Math.max(1, Math.floor((result.body.time + 600000 - Date.now()) / 1000)));
+      return result;
+    })().finally(() => { pageRequests.delete(key); });
+    pageRequests.set(key, pending);
+  }
+  const result = await pending;
+  if (result.error) return failure(result.error.status, result.error.code, result.error.message, origin, { retryAfterSeconds: result.error.after });
+  return json({ ...result.body, cacheHit: false }, 200, origin, { 'X-Data-Cache': 'MISS' });
+}
+
 // ---------- router ----------
 
 async function handle(request, env, ctx) {
@@ -626,7 +704,8 @@ async function handle(request, env, ctx) {
   const routes = enabledRoutes(env);
   const verifyKind = { '/v1/turnstile/verify': 'turnstile', '/v1/recaptcha/verify': 'recaptcha' }[url.pathname];
   const lookup = LOOKUPS[url.pathname];
-  const known = url.pathname === '/health' || url.pathname === '/v1/radar' || Boolean(lookup) || Boolean(verifyKind);
+  const pageProvider = { '/v1/page/ipinfo': 'ipinfo', '/v1/page/ipsuper': 'ipsuper' }[url.pathname];
+  const known = url.pathname === '/health' || url.pathname === '/v1/radar' || Boolean(lookup) || Boolean(verifyKind) || Boolean(pageProvider);
   if (!known) return failure(404, 'not-found', '接口不存在。', origin);
   const method = verifyKind ? 'POST' : 'GET';
 
@@ -654,11 +733,12 @@ async function handle(request, env, ctx) {
     return radar(url, env, origin, ctx);
   }
 
-  if (!routes.includes(lookup)) return failure(503, 'provider-not-configured', '该来源未配置服务端密钥。', origin);
+  if (!pageProvider && !routes.includes(lookup)) return failure(503, 'provider-not-configured', '该来源未配置服务端密钥。', origin);
   const names = [...url.searchParams.keys()];
   if (names.length !== 1 || names[0] !== 'ip') return failure(400, 'invalid-parameters', '只接受一个 ip 参数。', origin);
   const ip = publicIP(url.searchParams.get('ip'));
   if (!ip) return failure(400, 'invalid-public-ip', '请输入公网 IPv4 或 IPv6；域名、URL、私网及保留地址不接受。', origin);
+  if (pageProvider) return pageLookup(pageProvider, ip, url, origin, ctx);
 
   // Versioned, IP-only cache key: no secrets, no inbound headers.
   const cacheKey = new Request(new URL(`/__egress_cache/${lookup}-v3/${encodeURIComponent(ip)}`, url.origin));

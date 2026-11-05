@@ -46,6 +46,8 @@ python local_server.py
 
 Windows 双击“启动网站.cmd”启动本机查询服务。点击“查询”后，服务并行读取该 IP 的 IPinfo 详情页与 IPSuper 多库表，各自校验目标地址并补充缺失字段。需要 Python、Playwright 和 Chromium（首次安装可运行 python -m pip install playwright 和 python -m playwright install chromium）。同一 IP 的页面结果在内存保留 10 分钟。GitHub Pages 自动使用线上 Chromium 服务；访客只需打开网站并查询。免费容器休眠后的首次请求可能需要等待唤醒。Linux 容器从 Dockerfile 启动，/health 提供健康状态。IPinfo 网页和官方接口合并为一条数据库记录。IPSuper 补充的类型按原库名标识。
 
+网页自动补全优先经现有 API 的 `/v1/page/ipinfo`、`/v1/page/ipsuper` 中转，服务端先唤醒 Chromium 容器，再读取报告；相同来源和 IP 的并发请求合并，成功报告在边缘缓存，原始观察时间起最多保留 10 分钟。前端在连接中断、临时服务错误和限流时有限重试，最后尝试原网页服务入口；整轮最长 4 分钟，切换查询会取消旧请求。状态栏显示连接与重试进度，失败保留具体原因。本地页面优先使用 4188 服务，连接失败后使用同一线上恢复路径。
+
 ## 代码结构
 
 - `src/main.js` 编排：识别出口、并发查询、结果到达即重新评分。
