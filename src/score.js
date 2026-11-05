@@ -604,7 +604,7 @@ export function score(evidence) {
   const uses = {
     // Netflix-style catalogues: anonymity and datacenter lists first, then which region the IP resolves to.
     stream: meter('原生、非机房，解锁概率较高', (hit, gate, s) => {
-      s.anon(70); s.hosting(55); s.business(8); s.broadcast(20); s.geoSplit(25); s.lease(8); s.shared(10);
+      s.anon(91); s.hosting(55); s.business(8); s.broadcast(20); s.geoSplit(25); s.lease(8); s.shared(10);
       hit('隐私中继', 10 * anonFlags.relay.E, voteText(anonFlags.relay));
       s.ipv6(25); s.dns(10, 10, 4); s.ecs(8); s.risk(0.1);
       s.tor(60, 5, 'Tor 出口，流媒体基本都会拒绝');
@@ -614,14 +614,14 @@ export function score(evidence) {
       if (country && AI_BLOCKED.has(country)) gate(0, `${country} 不在主流 AI 服务的支持地区`);
       else hit('部分数据库定位在不支持地区', 40 * blockedGeo.reduce((sum, item) => sum + item.share, 0), blockedGeo.map(item => `${item.value}：${item.by.join('、')}`).join('；'));
       s.webrtc(35); s.dns(12, 25, 3); s.ecs(20); s.ipv6(15);
-      s.anon(25); s.hosting(15); s.risk(0.4); s.abuse(15);
+      s.anon(33); s.hosting(15); s.risk(0.4); s.abuse(15);
       s.tcp(12, 5); s.tz(8); s.lang(3); s.turnstile(10, 25); s.bots(8);
       s.tor(60, 10, 'Tor 出口，AI 服务会拒绝或封号');
     }),
     // CAPTCHA frequency follows IP reputation; a measured pass outweighs the predictions.
     captcha: meter(captchaPassed ? '实测直接通过' : '一般不会弹验证码', (hit, gate, s) => {
       const k = captchaPassed ? 0.4 : 1;
-      s.anon(25 * k); s.hosting(20 * k); s.risk(0.35 * k); s.abuse(25 * k);
+      s.anon(33 * k); s.hosting(20 * k); s.risk(0.35 * k); s.abuse(25 * k);
       hit('黑名单收录', Math.min(20, 10 * abuseListed.length + 3 * mailListed.length) * k, dnsblListed.map(item => item.name).join('、'));
       s.neighbours(20 * k); s.asnAbuse(12 * k); s.shared(10 * k);
       s.bots(10 * k);
@@ -630,7 +630,7 @@ export function score(evidence) {
     }, captchaPassed ? '实测通过：推测项按 40% 计' : ''),
     // Sign-up and payment risk engines: fraud score, anonymity, spam history and browser / IP consistency.
     account: meter('注册与付款风险较低', (hit, gate, s) => {
-      s.risk(0.6); s.anon(30); s.hosting(20); s.abuse(15);
+      s.risk(0.6); s.anon(39); s.hosting(20); s.abuse(15);
       if (sfs?.appears > 0) hit('垃圾注册记录', 12 + (sfsRecent ? 5 : 0), `StopForumSpam 记录 ${sfs.appears} 次${sfs.lastseen ? `，最近 ${sfs.lastseen.slice(0, 10)}` : ''}`);
       s.broadcast(6); s.geoSplit(10); s.lease(5); s.shared(8); s.bots(8);
       s.tz(12); s.lang(5); s.webrtc(20); s.dns(10, 15, 3); s.tcp(10, 5); s.ipv6(10);
@@ -643,13 +643,13 @@ export function score(evidence) {
       hit(mobileE > homeE ? '移动网络地址段' : '家宽地址段', (55 * homeE + 60 * mobileE) * clamp(0.4 + homeCertainty, 0.6, 1), '收件方通常整段拒收家宽 / 移动段直接发来的邮件');
       if (ptrSource && !hostname) hit('没有反向解析（PTR）', 25, '多数收件方要求发信 IP 有 PTR');
       else if (hostname && (ptrSource?.type === 'residential' || ptrSource?.type === 'mobile')) hit('PTR 像动态地址', 15, hostname);
-      s.abuse(15); s.neighbours(15); s.asnAbuse(15); s.anon(15); s.lease(5);
+      s.abuse(15); s.neighbours(15); s.asnAbuse(15); s.anon(20); s.lease(5);
       if (asnYoung) hit('新注册 ASN', 5, `ASN 注册于 ${asnInfo.regDate.slice(0, 10)}`);
       s.tor(60, 10, 'Tor 出口不能用来发信');
     }),
     // TikTok / Instagram: residential, native and a consistent device environment matter most.
     social: meter(homeE + mobileE >= 0.5 ? '原生住宅 / 移动网络，适合社媒运营' : '没有明显风控信号', (hit, gate, s) => {
-      s.hosting(55); s.anon(40); s.broadcast(20); s.geoSplit(15); s.business(5); s.lease(8); s.shared(15);
+      s.hosting(55); s.anon(52); s.broadcast(20); s.geoSplit(15); s.business(5); s.lease(8); s.shared(15);
       s.risk(0.25); s.abuse(10); s.bots(8);
       s.tz(15); s.lang(6); s.webrtc(20); s.dns(10, 15, 4); s.ipv6(15); s.tcp(12, 6);
       s.tor(80, 5, 'Tor 出口，社媒账号会被直接限制');
