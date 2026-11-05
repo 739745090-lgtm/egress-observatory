@@ -1,6 +1,6 @@
 import {sameIP, getJSON} from './util.js';
 
-const optional = {IPQS:'ipqs', IPQualityScore:'ipqs', Scamalytics:'scamalytics', IPHub:'iphub', 'vpnapi.io':'vpnapi'};
+const optional = {IPQS:'ipqs', IPQualityScore:'ipqs', Scamalytics:'scamalytics', IPHub:'iphub', 'vpnapi.io':'vpnapi', 'ip-api':'ipapi','ip-api.com':'ipapi','ipapi.is':'ipapiis',proxycheck:'proxycheck',Proxycheck:'proxycheck',AbuseIPDB:'abuseipdb'};
 const cachedReports = new Map();
 
 export async function lookupIPOK(ip, signal) {
@@ -18,12 +18,20 @@ export async function lookupIPOK(ip, signal) {
   for (const row of report.sources || []) {
     const id = optional[row.source];
     if (!id || row.ok !== true) continue;
+    const observed = typeof row.observedAt === 'number' ? row.observedAt : Date.parse(row.observedAt || '');
+    if (!Number.isFinite(observed) || observed > Date.now()+60000 || Date.now()-observed>72*3600000) {
+      rows[id] = {unavailable:true,reason:'第三方观测时间不明或超过 72 小时'}; continue;
+    }
     const flags = {};
     for (const key of ['vpn','proxy','tor','hosting','relay','abuser','crawler','mobile']) {
       if (typeof row.flags?.[key] === 'boolean') flags[key] = row.flags[key];
     }
     const percent = typeof row.risk === 'number' && row.risk >= 0 && row.risk <= 100 ? row.risk : null;
-    if (percent !== null || Object.keys(flags).length) rows[id] = {flags,percent,observedAt:row.observedAt || null};
+    const type = value => ({isp:'residential',residential:'residential',mobile:'mobile',business:'business',hosting:'hosting',education:'education',government:'government'})[String(value || '').toLowerCase()];
+    const fields = {usageType:type(row.usageType || row.networkType),companyType:type(row.companyType)};
+    if (flags.hosting === true) fields.usageType ??= 'hosting';
+    if (flags.mobile === true) fields.usageType ??= 'mobile';
+    if (percent !== null || Object.keys(flags).length || fields.usageType || fields.companyType) rows[id] = {flags,percent,fields,observedAt:new Date(observed).toISOString()};
   }
   if (cachedReports.size >= 32) cachedReports.delete(cachedReports.keys().next().value);
   cachedReports.set(ip,{until:Date.now()+600000,rows});

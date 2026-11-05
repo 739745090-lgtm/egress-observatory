@@ -40,6 +40,12 @@ IPHub 的 `block=0` 覆盖家宽和商业，只展示“家宽或商业”；`bl
 
 用户可在多源类型区展开“从来源网页补全”，通过书签从自己的官方查询页回传当前目标字段，或粘贴报告 JSON；核对 IP 与 10 分钟有效期。IPPure 继续仅提供查询链接。
 
+IPHub 与 IPQualityScore 的日常查询采用自动流程：可安装 `browser-helper` 一次，由 Egress 查询入口调用当前 Chrome 会话，临时结果页读取后关闭。独立 Chromium 会话受人机校验限制时保留失败原因，当前 Chrome 的成功报告仍能自动补齐字段。IPHub 除 block 组合标签外，按网页明确的 `proxyType.proxy`、`tor`、`hosting`、`relay` 等字段参与对应投票；组合 block 标签不拆成 VPN 或代理标记。
+
+IPSuper 风险矩阵按其页面图例读取：`detected` 为明确阳性，普通指示格为明确阴性，`null`（不支持）和 `failed`（获取失败）均不参与。逐库的 VPN、Proxy、Tor、Server、Abuse、Bot 分别映射到已有评分字段。IPQualityScore、Scamalytics、AbuseIPDB 的具名风险分进入同库风险评分；其他百分比不自动当作欺诈分。Chrome、官网与间接网页的补充都保留来源和时间，同一数据库不增加重复票。
+
+IPOK 补充覆盖其已返回的 IPHub、vpnapi.io、Scamalytics、IPQS、ip-api、ipapi.is、Proxycheck 和 AbuseIPDB 具名行。只有目标一致、行明确成功且观测时间在最近 72 小时的记录用于补缺；时间不明、超过时限和额度不足均保留原因。支持明确的使用 / 公司类型、风险分与匿名标记，已有同库字段优先。IPSuper Chrome 页面与云端页面同时返回时使用较新的观察，避免旧缓存覆盖新补全。
+
 ## Net.Coffee 的底层来源
 
 目标查询响应（`https://ip.net.coffee/api/ip/lookup/<IP>`）的 `geo_sources` 为地理观察。抽样查询返回 g1、g2、g3、g7；[页面脚本](https://ip.net.coffee/ip/ip-page.js?v=20260910d)按 g1、g7、g3、g2 排序。公开响应和显示逻辑没有给出这些代码与具体厂商的对应关系。company_type、isResidential、is_datacenter 是顶层汇总字段，没有逐库标签。本站保留各来源代号，只在旁证区展示，不参与数据库类型或定位投票。[官方卡片说明](https://card.net.coffee/)披露的资料包括 BGP、反向 DNS、WHOIS 和历史滥用记录。

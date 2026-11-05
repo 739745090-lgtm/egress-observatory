@@ -1,6 +1,6 @@
 import { sameIP } from './util.js';
-import { fillSource } from './supplements.js?v=2';
-import { extractProviderPage } from './page-extract.js?v=1';
+import { fillSource } from './supplements.js?v=3';
+import { extractProviderPage } from './page-extract.js?v=2';
 
 export const PAGE_SOURCES = ['iphub','ipqs','ipdata','ipregistry','dbip','scamalytics','ipapiis','ipquery','blackbox'];
 const fields = new Set(['country','city','region','asn','org','usageType','companyType','asnType','usageDetail','connectionType','risk','block','geoVote']);
@@ -27,7 +27,7 @@ export function readProviderReport(report, ip) {
     for (const key of ['vpn','proxy','tor','hosting','mobile','abuser','crawler','relay','resProxy']) if (typeof row.data?.flags?.[key] === 'boolean') data.flags[key] = row.data.flags[key];
     if (!Object.keys(data.flags).length && Object.keys(data).every(key => ['flags','geoVote'].includes(key))) {
       result[id] = {status:'error',error:'网页未提供可读取的目标字段'};
-    } else result[id] = {status:'ok',data,time:row.time};
+    } else result[id] = {status:'ok',data,time:row.time,...(row.via === 'Chrome' ? {via:'Chrome'} : {})};
   }
   return result;
 }
@@ -36,12 +36,44 @@ export function mergeProviderPage(record, page, name) {
   if (!page) return record;
   if (page.status !== 'ok') return {...record,webLookup:page,...(record.status === 'ok' ? {} : {error:[record.error, page.error].filter(Boolean).join(' · ')})};
   const data = {...page.data};
+  data.flags = {...page.data.flags};
+  if (data.flags.resProxy === true) { data.resProxy = true; data.flags.proxy = true; }
   if (data.usageType) data.type = data.usageType;
   data.webObservedAt = new Date(page.time).toISOString();
-  let merged = fillSource(record, data, name + ' 官方网页 · ' + data.webObservedAt);
+  let merged = fillSource(record, data, name + (page.via === 'IPSuper' ? '，经 IPSuper 网页逐库字段' : page.via === 'Chrome' ? ' 官方网页，Chrome 自动读取' : ' 官方网页') + ' · ' + data.webObservedAt);
+  const scored = ['vpn','proxy','tor','hosting','relay','crawler','abuser'].filter(key => typeof data.flags[key] === 'boolean' && record.data?.flags?.[key] == null);
+  if (data.risk != null && record.data?.risk == null) scored.push('risk');
+  if (scored.length) merged = {...merged,data:{...merged.data,webScoreFields:[...new Set([...(record.data?.webScoreFields || []),...scored])]}};
   const added = ['usageType','companyType'].filter(key => page.data[key] && !record.data?.[key]);
   if (added.length) merged = {...merged,data:{...merged.data,webTypeFields:added}};
   return {...merged,webLookup:page};
+}
+
+export function lookupChromePages(ip,signal,progress=()=>{}) {
+  return new Promise((resolve,reject)=>{
+    signal.throwIfAborted();
+    const requestId = crypto.randomUUID();
+    let started = false;
+    let discover,timeout;
+    const send = kind => window.postMessage({channel:'egress-browser-client',kind,requestId,ip},location.origin);
+    const finish = (value,error) => { clearTimeout(discover);clearTimeout(timeout);window.removeEventListener('message',receive);signal.removeEventListener('abort',abort); error ? reject(error) : resolve(value); };
+    const abort = () => { send('cancel'); finish(null,signal.reason); };
+    const receive = event => {
+      if(event.source!==window || event.origin!==location.origin || event.data?.channel!=='egress-browser-helper') return;
+      const message = event.data;
+      if(message.kind==='ready' && (!message.requestId || message.requestId===requestId) && !started) {
+        started=true;clearTimeout(discover);progress();send('lookup');
+        timeout=setTimeout(()=>{send('cancel');finish(null,Error('Chrome 网页读取超时'));},160000);
+      }
+      if(message.requestId!==requestId) return;
+      if(message.kind==='report') finish(message.report);
+      else if(message.kind==='error') finish(null,Error(message.error));
+    };
+    window.addEventListener('message',receive);
+    signal.addEventListener('abort',abort,{once:true});
+    discover=setTimeout(()=>finish(null),1500);
+    send('discover');
+  });
 }
 
 export function setupProviderImport() {

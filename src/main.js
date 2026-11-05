@@ -1,10 +1,10 @@
-import { lookupIPOK, lookupDBIPWeb, fillSource } from './supplements.js?v=2';
+import { lookupIPOK, lookupDBIPWeb, fillSource } from './supplements.js?v=3';
 import { readIPinfoPage, mergeIPinfoPage } from './ipinfo-page.js?v=3.4';
-import { setupImport, supplementTypes, readReport } from './ipsuper.js?v=3.2';
-import { setupProviderImport, readProviderReport, mergeProviderPage, PAGE_SOURCES } from './provider-pages.js?v=1';
+import { setupImport, supplementTypes, readReport, readRiskReport } from './ipsuper.js?v=3.3';
+import { setupProviderImport, readProviderReport, mergeProviderPage, lookupChromePages, PAGE_SOURCES } from './provider-pages.js?v=2';
 /** Orchestration: detect the egress, fan out every check, rescore as results arrive. */
 import { API_BASE, PAGE_LOOKUP_CLOUD } from '../config.js?v=cloud2';
-import { lookupPage } from './page-lookups.js?v=4';
+import { lookupPage } from './page-lookups.js?v=5';
 import { getJSON, parseIP, isPublicIP, sameIP, maskIP, maskText } from './util.js?v=4.1';
 import { SOURCES, runSource } from './sources.js?v=3.2';
 import { DNSBLS, checkDNSBL, CIDR_LISTS, checkCIDRList, asnAbuseDensity } from './blocklists.js';
@@ -216,12 +216,15 @@ async function startRun(input, fetchPages = true) {
   let webTypes = importedTypes;
   let ipokRows = {};
   let ipsuperRisk = {};
+  let ipsuperPages = {};
+  let ipsuperObservedAt = 0;
   const records = new Map();
   function refreshTypes() {
     const abuse = records.get('abuseipdb')?.data;
     for (const [id, record] of records) {
       let data = id === 'ipinfo' ? mergeIPinfoPage(record, run.ipinfoPage) : record;
       data = mergeProviderPage(data, run.providerPages[id], SOURCES.find(source => source.id === id)?.name || id);
+      data = mergeProviderPage(data, ipsuperPages[id], SOURCES.find(source => source.id === id)?.name || id);
       if (id === 'ipinfo' && !data.data?.usageType && abuse?.usageType) {
         const d = {...data.data, flags:data.data?.flags || {}, usageType:abuse.usageType, type:data.data?.type || abuse.usageType, usageVia:'AbuseIPDB'};
         data = {...data,status:'ok',directStatus:data.status,error:null,data:d};
@@ -235,8 +238,10 @@ async function startRun(input, fetchPages = true) {
         data = fillSource(data, {webRiskPercent:namedRisk}, 'IPSuper 网页逐库风险百分比，仅展示');
       }
       const row = ipokRows[id];
-      if (row && !row.unavailable && record.status !== 'ok') {
-        data = fillSource(data, {flags:row.flags, webRiskScore:row.percent, webObservedAt:row.observedAt}, 'IPOK 逐库观察'+(row.observedAt ? ' · '+row.observedAt : ''));
+      if (row && !row.unavailable) {
+        const scored = Object.keys(row.flags).filter(key=>data.data?.flags?.[key]==null);
+        if(row.percent!=null && data.data?.risk==null)scored.push('risk');
+        data = fillSource(data, {...row.fields,flags:row.flags, risk:row.percent, webRiskScore:row.percent, webObservedAt:row.observedAt,webScoreFields:[...new Set([...(data.data?.webScoreFields || []),...scored])]}, 'IPOK 逐库风险与匿名标记'+(row.observedAt ? ' · '+row.observedAt : ''));
       }
       data = supplementTypes(data, webTypes(parsed.ip, id));
       if (row?.unavailable && data.status !== 'ok' && !data.webLookup) data = {...data,error:row.reason === 'cached_only' ? '网页暂无该 IP 的缓存记录' : '网页来源暂缺 · '+row.reason};
@@ -249,26 +254,52 @@ async function startRun(input, fetchPages = true) {
     lookupIPOK(parsed.ip, signal).then(rows => {
       if (!alive()) return;
       ipokRows = rows; refreshTypes(); scheduleRender();
+      statuses.ipok='IPOK 间接补充 '+Object.values(rows).filter(row=>!row.unavailable).length+' 库';
+      pageStatus.textContent=Object.values(statuses).join(' ｜ ');
     }).catch(error => {
       if (!alive()) return;
       ipokRows = Object.fromEntries(['iphub','vpnapi','scamalytics','ipqs'].map(id => [id,{unavailable:true,reason:error.message}]));
       refreshTypes(); scheduleRender();
+      statuses.ipok='IPOK：'+error.message;
+      pageStatus.textContent=Object.values(statuses).join(' ｜ ');
     });
-    const statuses = {ipinfo:'IPinfo 查询中', ipsuper:'IPSuper 查询中',sources:'缺失来源网页查询中'};
+    const statuses = {ipinfo:'IPinfo 查询中', ipsuper:'IPSuper 查询中',ipok:'IPOK 第三方查询中',sources:'来源网页自动查询排队中'};
+    const primaryPages = [];
     pageStatus.textContent = Object.values(statuses).join(' · ');
-    for (const provider of Object.keys(statuses)) {
+    lookupChromePages(parsed.ip,signal,()=>{
+      if(!alive())return;
+      statuses.chrome='Chrome 正在自动读取第三方检测站及 IPHub、IPQualityScore';
+      pageStatus.textContent=Object.values(statuses).join(' ｜ ');
+    }).then(report=>{
+      if(!alive() || !report)return;
+      const pages=readProviderReport(report,parsed.ip);
+      for(const [id,page] of Object.entries(pages)) if(page.status==='ok' || !run.providerPages[id])run.providerPages[id]=page;
+      if(report.ipsuper && report.ipsuper.time>=ipsuperObservedAt) {
+        ipsuperPages=readRiskReport(report.ipsuper,parsed.ip);ipsuperRisk=report.ipsuper.riskPercent || {};
+        webTypes=readReport(report.ipsuper,parsed.ip);ipsuperObservedAt=report.ipsuper.time;
+        run.ipsuperReturned=SOURCES.filter(source=>webTypes(parsed.ip,source.id)).map(source=>source.id);
+        statuses.ipsuper='IPSuper 第三方页面已自动读取，类型与风险字段已补充';
+      }
+      statuses.chrome=['iphub','ipqs'].map(id=>(id==='iphub'?'IPHub':'IPQualityScore')+(pages[id]?.status==='ok'?' 已自动读取':'：'+(pages[id]?.error || '未返回字段'))).join(' · ');
+      refreshTypes();scheduleRender();pageStatus.textContent=Object.values(statuses).join(' ｜ ');
+    }).catch(error=>{if(alive() && !signal.aborted){statuses.chrome=error.message;pageStatus.textContent=Object.values(statuses).join(' ｜ ');}});
+    for (const provider of ['ipinfo','ipsuper','sources']) {
       const name = provider === 'sources' ? '来源网页' : provider === 'ipinfo' ? 'IPinfo' : 'IPSuper';
-      lookupPage(provider, parsed.ip, signal, message => {
+      const query = () => lookupPage(provider, parsed.ip, signal, message => {
         if (!alive()) return;
         statuses[provider] = name + '：' + message;
         pageStatus.textContent = Object.values(statuses).join(' ｜ ');
-      })
+      });
+      const pageTask = (provider === 'sources' ? Promise.allSettled(primaryPages).then(() => { signal.throwIfAborted(); return query(); }) : query())
         .then(report => {
           if (!alive()) return;
           if (!sameIP(report.ip, parsed.ip)) throw Error('返回的 IP 不匹配');
           if (provider === 'sources') {
             const pages = readProviderReport(report,parsed.ip);
-            run.providerPages = {...pages,...run.providerPages};
+            for (const [id,page] of Object.entries(pages)) {
+              const previous = run.providerPages[id];
+              if (!previous || page.status === 'ok' && (previous.status !== 'ok' || page.time >= previous.time)) run.providerPages[id] = page;
+            }
             const ok = Object.values(pages).filter(row => row.status === 'ok').length;
             statuses.sources = `来源网页已返回 ${ok}/${Object.keys(pages).length}，逐源状态见下表`;
           } else if (provider === 'ipinfo') {
@@ -277,10 +308,16 @@ async function startRun(input, fetchPages = true) {
             statuses.ipinfo = ['IPinfo 网页已读取', d.companyName, d.asnType && 'ASN 类型 '+d.asnType,
               typeof d.flags.hosting === 'boolean' && (d.flags.hosting ? '机房检出' : '机房未检出')].filter(Boolean).join(' · ');
           } else {
-            webTypes = readReport(report, parsed.ip);
-            ipsuperRisk = report.riskPercent || {};
+            if(report.time>=ipsuperObservedAt) {
+              webTypes = readReport(report, parsed.ip);
+              ipsuperRisk = report.riskPercent || {};
+              ipsuperPages = readRiskReport(report,parsed.ip);
+              ipsuperObservedAt=report.time;
+            }
             run.ipsuperReturned = SOURCES.filter(source => webTypes(parsed.ip, source.id)).map(source => source.id);
-            statuses.ipsuper = 'IPSuper 网页已读取';
+            const n=Object.keys(ipsuperPages).length;
+            const fields=Object.values(ipsuperPages).reduce((sum,row)=>sum+Object.keys(row.data.flags).length+(row.data.risk!=null?1:0),0);
+            statuses.ipsuper = `IPSuper 间接补充 ${n} 库、${fields} 个风险字段，已参与评分`;
           }
           refreshTypes(); scheduleRender();
         }).catch(error => {
@@ -292,6 +329,7 @@ async function startRun(input, fetchPages = true) {
           }
         })
         .finally(() => { if (alive()) pageStatus.textContent = Object.values(statuses).join(' ｜ '); });
+      if (provider !== 'sources') primaryPages.push(pageTask);
     }
   }
   const tasks = [];

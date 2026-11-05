@@ -19,7 +19,8 @@ export async function lookupPage(provider, ip, signal, progress = () => {}) {
   const key = `${provider}:${ip}`;
   signal.throwIfAborted();
   const cached = reports.get(key);
-  if (cached && Date.now() - cached.time < 600000) return cached;
+  const cacheMs = provider === 'sources' && Object.values(cached?.sources || {}).some(row => row.status !== 'ok') ? 60000 : 600000;
+  if (cached && Date.now() - cached.time < cacheMs) return cached;
   const relay = { url: `${API_BASE}/v1/page/${provider}?ip=${encodeURIComponent(ip)}`, method: 'GET', timeout: 65000 };
   const direct = { url: `${PAGE_LOOKUP_CLOUD}/lookup/${provider}`, method: 'POST', timeout: 145000 };
   const local = PAGE_LOOKUP_BASE !== PAGE_LOOKUP_CLOUD;

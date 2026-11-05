@@ -1,11 +1,12 @@
 """Bounded, fixed-site browser fallbacks for unavailable provider records."""
 import asyncio
+import os
 import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
 SITES = {
-    "iphub": "https://iphub.info/",
+    "iphub": "https://iphub.info/?ip={ip}",
     "ipqs": "https://www.ipqualityscore.com/free-ip-lookup-proxy-vpn-test/lookup/{ip}",
     "ipdata": "https://ipdata.co/{ip}",
     "ipregistry": "https://ipregistry.co/{ip}",
@@ -24,9 +25,14 @@ def lookup_sources(ip):
 async def _lookup(ip):
     from playwright.async_api import async_playwright
     extractor = (Path(__file__).parent / "src" / "page-extract.js").read_text(encoding="utf-8").replace("export function", "function")
-    evaluate = "({provider,ip}) => {" + extractor + "; return extractProviderPage(provider,ip); }"
+    evaluate = "({provider,ip,raw}) => {" + extractor + "; return extractProviderPage(provider,ip,raw); }"
     async with async_playwright() as api:
-        options = {"headless": True}
+        # Use an ordinary Chromium window. Linux containers provide a virtual display;
+        # Windows keeps this short-lived lookup window outside the desktop workspace.
+        headed = os.name == "nt" or bool(os.environ.get("DISPLAY"))
+        options = {"headless": not headed}
+        if os.name == "nt":
+            options["args"] = ["--window-position=-32000,-32000"]
         if not Path(api.chromium.executable_path).exists():
             options["channel"] = "chrome"
         browser = await api.chromium.launch(**options)
@@ -38,23 +44,41 @@ async def _lookup(ip):
                 page = await context.new_page()
                 observed = None
                 try:
-                    response = await page.goto(url.format(ip=ip), wait_until="domcontentloaded", timeout=16000)
+                    raw = None
+                    if provider == "iphub":
+                        # Use the guest lookup used by the public page, in its browser
+                        # context. It needs no account and does not wait for CDN widgets.
+                        response = await page.goto(url.format(ip=ip), wait_until="commit", timeout=20000)
+                        await page.locator("body").wait_for(state="attached", timeout=10000)
+                        reply = await page.evaluate("""async ip => {
+                          const response = await fetch('/api/lookup/ip', {method:'POST', headers:{'Content-Type':'application/json',Accept:'application/json'}, body:JSON.stringify({ip,apiKeyID:'guest','cf-turnstile-response':null}),signal:AbortSignal.timeout(20000)});
+                          return {status:response.status,payload:await response.json()};
+                        }""", ip)
+                        if reply["status"] != 200:
+                            raise ValueError("IPHub 网页查询返回 HTTP " + str(reply["status"]))
+                        payload = reply["payload"]
+                        if payload.get("captchaRequired"):
+                            raise ValueError("IPHub 网页需要人机校验")
+                        if payload.get("success") is not True or payload.get("data", {}).get("ip") != ip:
+                            raise ValueError("IPHub 网页未返回目标记录")
+                        raw = payload["data"]
+                    else:
+                        response = await page.goto(url.format(ip=ip), wait_until="commit", timeout=20000)
                     if urlsplit(page.url).hostname != urlsplit(url).hostname:
                         raise ValueError("网页跳转到其他站点，未读取字段")
-                    if not response or response.status >= 400:
+                    # A normal navigation may first receive a browser-check document.
+                    # Wait for it to settle without interacting with a CAPTCHA.
+                    if not response or response.status >= 400 and not (provider == "ipqs" and response.status == 403):
                         raise ValueError("网页访问受限" if response and response.status in (401, 403) else "网页返回 HTTP " + str(response.status if response else "无响应"))
-                    if provider == "iphub":
-                        await page.get_by_role("textbox", name="IP address or domain name").fill(ip, timeout=4000)
-                        await page.get_by_role("button", name="Lookup", exact=True).click(timeout=4000)
-                        await page.wait_for_function("ip => document.querySelector('[data-copy-field=ip]')?.textContent.trim() === ip", arg=ip, timeout=12000)
-                    elif provider == "ipapiis":
+                    await page.locator("body").wait_for(state="attached", timeout=10000)
+                    if provider == "ipapiis":
                         await page.get_by_role("searchbox", name="Search by IP address or ASN").fill(ip, timeout=4000)
                         await page.get_by_role("button", name="Run IP lookup", exact=True).click(timeout=4000)
                     # Give client-rendered JSON a bounded chance to replace placeholders.
-                    end = time.monotonic() + 8
+                    end = time.monotonic() + (30 if provider == "ipqs" else 10)
                     while True:
                         try:
-                            observed = await page.evaluate(evaluate, {"provider": provider, "ip": ip})
+                            observed = await page.evaluate(evaluate, {"provider": provider, "ip": ip, "raw": raw})
                             break
                         except Exception as exc:
                             if time.monotonic() >= end:

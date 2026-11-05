@@ -71,3 +71,19 @@ export function supplementTypes(record, fields) {
   data.sourceNote = [data.sourceNote,'部分类型经 IPSuper 页面导入'].filter(Boolean).join(' · ');
   return {...record,status:'ok',error:null,directStatus:record.status,directError:record.error,data};
 }
+
+export function readRiskReport(report, ip) {
+  if (!report || !sameIP(report.ip,ip) || !Number.isFinite(report.time) || Math.abs(Date.now()-report.time)>600000) throw Error('IPSuper 风险报告的目标或时间无效');
+  const result = {};
+  const names = new Map([...columns, ['Scamalytics','scamalytics'], ['IPWhois','ipwhois']]);
+  for (const [name,id] of names) {
+    const flags = {};
+    for (const key of ['hosting','abuser','proxy','vpn','tor','crawler']) if (typeof report.riskFlags?.[name]?.[key] === 'boolean') flags[key] = report.riskFlags[name][key];
+    const data = {flags};
+    const risk = report.riskPercent?.[name];
+    // These named services publish an actual 0–100 risk / abuse score.
+    if (['ipqs','scamalytics','abuseipdb'].includes(id) && typeof risk === 'number' && risk >= 0 && risk <= 100) data.risk = risk;
+    if (Object.keys(flags).length || data.risk != null) result[id] = {status:'ok',data,time:report.time,via:'IPSuper'};
+  }
+  return result;
+}

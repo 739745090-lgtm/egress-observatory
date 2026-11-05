@@ -36,7 +36,7 @@ def cors(response):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "apiVersion": 3, "providers": ["ipinfo", "ipsuper", "sources"]}
+    return {"status": "ok", "apiVersion": 4, "providers": ["ipinfo", "ipsuper", "sources"]}
 
 
 @app.route("/lookup/<provider>", methods=["POST", "OPTIONS"])
@@ -91,7 +91,8 @@ def report(provider):
             result = lookup(ip, provider)
         if ipaddress.ip_address(result["ip"]) != addr: raise ValueError()
         with CACHE_LOCK:
-            CACHE[key] = (time.monotonic() + 600, result)
+            ttl = 60 if provider == "sources" and any(row.get("status") != "ok" for row in result.get("sources", {}).values()) else 600
+            CACHE[key] = (time.monotonic() + ttl, result)
             CACHE.move_to_end(key)
             if len(CACHE) > 256: CACHE.popitem(last=False)
         return jsonify(result)

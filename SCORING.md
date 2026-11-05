@@ -2,6 +2,8 @@
 
 实现见 [src/score.js](src/score.js)，来源补充与归属说明见 [DATA-SOURCES.md](DATA-SOURCES.md)。
 
+网页自动补充沿用下表的来源权重：IPHub、IPQualityScore 等官网 / Chrome 网页结果和 IPSuper、IPOK 的逐库字段合并进原来源记录。明确的 VPN、代理、Tor、机房、中继、爬虫、滥用值参与对应投票，明确的 0–100 风险分参与风险项，并联动各用途评分。同库只计一次；不支持、未返回或抓取失败均不当作阴性。IPHub 的 block 组合类别不单独推导 VPN 或代理。
+
 ## 总分
 
 ```

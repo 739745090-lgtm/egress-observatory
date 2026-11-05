@@ -662,7 +662,12 @@ async function fetchPageReport(provider, ip) {
         rows[name] = row;
       }
       const riskPercent = Object.fromEntries(Object.entries(report.riskPercent || {}).filter(([name, value]) => name.length <= 80 && typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100));
-      body = { ip, time: report.time, headers: report.headers, rows, riskPercent };
+      const riskFlags = {};
+      for (const name of ['IPData','IPRegistry','IP2Location','Scamalytics','IP-API','IPQualityScore','IPWhois','DBIP']) {
+        const flags = Object.fromEntries(['hosting','abuser','proxy','vpn','tor','crawler'].filter(key => typeof report.riskFlags?.[name]?.[key] === 'boolean').map(key => [key,report.riskFlags[name][key]]));
+        if (Object.keys(flags).length) riskFlags[name] = flags;
+      }
+      body = { ip, time: report.time, headers: report.headers, rows, riskPercent, riskFlags };
     }
     return { body };
   } catch (error) {
@@ -673,7 +678,7 @@ async function fetchPageReport(provider, ip) {
 }
 
 async function pageLookup(provider, ip, url, origin, ctx) {
-  const cacheKey = new Request(new URL(`/__egress_cache/page-${provider}-v1/${encodeURIComponent(ip)}`, url.origin));
+  const cacheKey = new Request(new URL(`/__egress_cache/page-${provider}-v2/${encodeURIComponent(ip)}`, url.origin));
   const cached = await readCache(cacheKey);
   if (cached?.ip === ip && Date.now() - cached.time < 600000) return json({ ...cached, cacheHit: true }, 200, origin, { 'X-Data-Cache': 'HIT' });
   const key = `${provider}:${ip}`;

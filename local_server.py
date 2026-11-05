@@ -44,6 +44,10 @@ def lookup(ip, provider):
                 && ([...grid.querySelectorAll('.grid-cell')].some(c => /家宽|机房|商业|移动|教育|政府/.test(c.innerText)) || document.querySelector('.risk-scores .right-label[title]'))
                 ;
             }""", arg=ip, timeout=60000)
+            page.wait_for_function(r"""() => {
+              const running=document.body.innerText.match(/\d+\s*tasks,?\s*(\d+)\s*running/i);
+              return !running || Number(running[1])===0;
+            }""", timeout=60000)
             return page.locator(".attributes-grid").filter(has_text="公司类型").first.evaluate(r"""grid => {
               const headers = [...grid.querySelectorAll(':scope > .grid-header')].slice(1).map(n=>n.innerText.trim());
               const rows = {};
@@ -60,7 +64,24 @@ def lookup(ip, provider):
                 const match = /^风险\s*\(([0-9.]+)%\)$/.exec(title);
                 if (name && match && Number(match[1]) <= 100) riskPercent[name] = Number(match[1]);
               }
-              return {headers,rows,riskPercent,ip:new URL(location.href).searchParams.get('ip'),time:Date.now()};
+              const riskFlags = {};
+              const factors = document.querySelector('.factors-grid');
+              const flagNames = [...(factors?.querySelectorAll(':scope > .grid-header') || [])].slice(1).map(n=>n.innerText.trim());
+              const flagKeys = {Server:'hosting',Abuse:'abuser',Proxy:'proxy',Vpn:'vpn',Tor:'tor',Bot:'crawler'};
+              for (const label of factors?.querySelectorAll(':scope > .grid-label') || []) {
+                const cells = []; let cell = label.nextElementSibling;
+                while (cell?.classList.contains('grid-cell')) { cells.push(cell); cell=cell.nextElementSibling; }
+                if (cells.length !== flagNames.length) continue;
+                const flags = {};
+                cells.forEach((cell,i)=>{
+                  const key = flagKeys[flagNames[i]]; const indicator = cell.querySelector('.factor-indicator');
+                  // The legend defines bare indicator = negative, detected = positive,
+                  // null = unsupported, failed = unavailable. Only the first two vote.
+                  if (key && indicator && !indicator.classList.contains('null') && !indicator.classList.contains('failed')) flags[key] = indicator.classList.contains('detected');
+                });
+                if (Object.keys(flags).length) riskFlags[label.innerText.trim()] = flags;
+              }
+              return {headers,rows,riskPercent,riskFlags,ip:new URL(location.href).searchParams.get('ip'),time:Date.now()};
             }""")
         except Exception:
             # A crashed/closed browser must not replace the original error during cleanup.
@@ -112,7 +133,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self.reply(429, {"error":"上一轮网页查询仍在运行"})
         try:
             result = cache.get(ip)
-            if not result or time.time()*1000-result["time"] > 600000:
+            ttl = 60000 if provider == "sources" and result and any(row.get("status") != "ok" for row in result.get("sources", {}).values()) else 600000
+            if not result or time.time()*1000-result["time"] > ttl:
                 result = lookup(ip, provider)
                 if result["ip"] != ip: raise ValueError()
                 if len(cache) >= 128: cache.pop(next(iter(cache)))
