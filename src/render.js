@@ -2,7 +2,7 @@
 import { esc, countryName, maskIP, formatOffset, zoneOffset } from './util.js';
 import { SOURCES } from './sources.js?v=3.2';
 import { DNSBLS, CIDR_LISTS } from './blocklists.js';
-import { CATEGORIES, TYPE_LABEL } from './score.js';
+import { CATEGORIES, TYPE_LABEL } from './score.js?v=4.0';
 import { captchaConfig } from './captcha.js';
 
 const $ = id => document.getElementById(id);

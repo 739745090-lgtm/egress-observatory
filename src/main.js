@@ -9,8 +9,8 @@ import { DNSBLS, checkDNSBL, CIDR_LISTS, checkCIDRList, asnAbuseDensity } from '
 import { fetchASN, inferASN, detectLease } from './asn.js';
 import { detectEgress, summarizeEgress, probeWebRTC, probeDNS, classifyDNS, probeTCP, probeEnvironment, probeIPv6, classifyIPv6, traceProbe } from './probes.js';
 import { runTurnstile, runRecaptcha } from './captcha.js';
-import { score } from './score.js';
-import * as view from './render.js?v=cloud3';
+import { score } from './score.js?v=4.0';
+import * as view from './render.js?v=4.0';
 
 const $ = id => document.getElementById(id);
 const app = {
