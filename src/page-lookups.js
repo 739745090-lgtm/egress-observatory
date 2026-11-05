@@ -21,14 +21,11 @@ export async function lookupPage(provider, ip, signal, progress = () => {}) {
   const cached = reports.get(key);
   const cacheMs = provider === 'sources' && Object.values(cached?.sources || {}).some(row => row.status !== 'ok') ? 60000 : 600000;
   if (cached && Date.now() - cached.time < cacheMs) return cached;
-  const relay = { url: `${API_BASE}/v1/page/${provider}?ip=${encodeURIComponent(ip)}`, method: 'GET', timeout: 65000 };
-  const direct = { url: `${PAGE_LOOKUP_CLOUD}/lookup/${provider}`, method: 'POST', timeout: 145000 };
+  const relay = { url: `${API_BASE}/v1/page/${provider}?ip=${encodeURIComponent(ip)}`, method: 'GET', timeout: 145000 };
   const local = PAGE_LOOKUP_BASE !== PAGE_LOOKUP_CLOUD;
-  const routes = provider === 'sources'
-    ? (local ? [{url:`${PAGE_LOOKUP_BASE}/lookup/sources`,method:'POST',timeout:110000}, direct] : [direct, {...direct,timeout:65000}])
-    : local
-    ? [{ url: `${PAGE_LOOKUP_BASE}/lookup/${provider}`, method: 'POST', timeout: 110000 }, { ...relay, timeout: 90000 }, { ...direct, timeout: 35000 }]
-    : [direct, relay, { ...direct, timeout: 25000 }];
+  const routes = local
+    ? [{ url: `${PAGE_LOOKUP_BASE}/lookup/${provider}`, method: 'POST', timeout: 110000 }, { ...relay, timeout: 90000 }, { ...relay, timeout: 25000 }]
+    : [relay, { ...relay, timeout: 65000 }, { ...relay, timeout: 25000 }];
   const deadline = AbortSignal.timeout(240000);
   const overall = AbortSignal.any([signal, deadline]);
   let lastError;
@@ -55,6 +52,7 @@ export async function lookupPage(provider, ip, signal, progress = () => {}) {
       }
       if (!response.ok) {
         const error = Error(`HTTP ${response.status}：${report.error || '网页服务请求失败'}`);
+        if (report.errorCode === 'caller-rate-limit') throw error;
         error.retryable = transient.has(response.status) || [403, 404].includes(response.status);
         error.skipRoute = [403, 404].includes(response.status);
         const seconds = Number(response.headers.get('Retry-After') || report.retryAfterSeconds);

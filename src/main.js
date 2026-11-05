@@ -3,8 +3,8 @@ import { readIPinfoPage, mergeIPinfoPage } from './ipinfo-page.js?v=3.4';
 import { setupImport, supplementTypes, readReport, readRiskReport, mergeTypeReports, mergeRiskReports } from './ipsuper.js?v=3.4';
 import { setupProviderImport, readProviderReport, mergeProviderPage, lookupChromePages } from './provider-pages.js?v=4.1';
 /** Orchestration: detect the egress, fan out every check, rescore as results arrive. */
-import { API_BASE, PAGE_LOOKUP_CLOUD } from '../config.js?v=cloud2';
-import { lookupPage } from './page-lookups.js?v=5';
+import { API_BASE } from '../config.js?v=cloud2';
+import { lookupPage } from './page-lookups.js?v=6';
 import { getJSON, parseIP, isPublicIP, sameIP, maskIP, maskText } from './util.js?v=4.1';
 import { SOURCES, runSource } from './sources.js?v=3.3';
 import { DNSBLS, checkDNSBL, CIDR_LISTS, checkCIDRList, asnAbuseDensity } from './blocklists.js';
@@ -384,7 +384,7 @@ async function startRun(input, fetchPages = true) {
       }
       if (fetchPages && source.id === 'getipintel' && result.status !== 'ok') {
         try {
-          const response = await fetch(PAGE_LOOKUP_CLOUD + '/lookup/getipintel', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ip:parsed.ip}),signal:AbortSignal.any([signal,AbortSignal.timeout(130000)])});
+          const response = await fetch(API_BASE + '/v1/page/getipintel?ip=' + encodeURIComponent(parsed.ip), {signal:AbortSignal.any([signal,AbortSignal.timeout(130000)])});
           const answer = await response.json();
           if (response.ok && sameIP(answer.ip,parsed.ip) && Number.isFinite(answer.probability) && answer.probability>=0 && answer.probability<=1) {
             result = fillSource(result,{probability:answer.probability,risk:answer.risk},'GetIPIntel 官方免费接口');

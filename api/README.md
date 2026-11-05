@@ -9,6 +9,8 @@
 | `/health` | GET | — | 返回 `apiVersion` 与已启用的 `routes`，前端据此决定调用哪些来源 |
 | `/v1/page/ipinfo?ip=` | GET | — | 唤醒网页查询容器并读取目标 IP 的 IPinfo 摘要；按 IP 合并并发请求、缓存成功报告 |
 | `/v1/page/ipsuper?ip=` | GET | — | 读取目标 IP 的 IPSuper 类型表、逐库风险百分比与明确匿名 / 滥用标记 `riskFlags`，保留原始观察时间 |
+| `/v1/page/sources?ip=` | GET | — | 读取其他固定来源的网页字段，部分失败的报告仅缓存 60 秒 |
+| `/v1/page/getipintel?ip=` | GET | — | 经 Render 调用 GetIPIntel，使用同一个调用者 IP 限额 |
 | `/v1/proxycheck?ip=` | GET | `PROXYCHECK_API_KEY` | VPN、代理、Tor、机房、风险分、入侵 / 爬虫标记、设备估计 |
 | `/v1/ipapi?ip=` | GET | — | ip-api.com（免费接口只有 HTTP，浏览器无法直连）：代理、机房、移动 |
 | `/v1/ip2location?ip=` | GET | `IP2LOCATION_API_KEY`（建议） | IP2Location.io；免密钥额度按调用 IP 计算，托管出口共享会被用光，配置免费账号 key（每月 5 万次）后按账号计；套餐含 `usage_type` 时提供使用 / 公司类型 |
@@ -49,8 +51,10 @@
 - CORS 只允许 `ALLOWED_ORIGIN`（默认 `https://blackslience-reaper.github.io`）和本地 `http://127.0.0.1:4187`、`http://localhost:4187`；预检只接受 `Accept`、`Content-Type` 头。
 - 查询只接受一个公网 IP 参数，拒绝域名、URL、私网、保留地址；上游响应的目标必须与查询一致。
 - 只访问固定的上游地址，禁止重定向，不转发访客 cookie、Origin 或授权头；错误使用固定文案，不回显上游 URL 或密钥。
-- 每个调用者（平台提供的 `CF-Connecting-IP`）在单个 isolate 内每分钟 30 次，所有路由共享计数；内存计数不跨 isolate 持久化。
-- 成功的查询结果按“来源 + IP”缓存 600 秒；验证路由不缓存。上游 429 原样返回 `Retry-After`，不自动重试。
+- 每个调用者出口 IP 每 60 秒最多 30 次查询，查询、网页补全、统计和验证码校验共享额度，缓存命中也计数。计数由 D1 单条 UPSERT 原子更新，跨 isolate、区域及 Worker 重启共享；超限返回 `429 caller-rate-limit`、`Retry-After` 和 `retryAfterSeconds`。`/health`、合法预检不占查询额度。
+- 只接受 Cloudflare 提供的调用者地址；Sites 无 `request.cf` 时要求平台覆盖后的 `CF-Connecting-IP` 与 `X-Real-IP` 一致，忽略 `X-Forwarded-For`、请求体和目标 IP 中的身份声明。缺失可信地址或 D1 不可用时返回 503，暂停查询以保持额度保护。D1 的限流键使用服务端随机盐与调用者 IP 的 SHA-256，不存调用者 IP 原文；过期计数和凭据会被清理。
+- Render 查询统一经 `/v1/page/*` 转发。主 API 通过额度检查后生成 120 秒有效的一次性随机凭据，并在 D1 绑定来源及目标 IP；Render 在访问缓存和 Chromium 前请求 `/internal/page-admission` 原子消费凭据。缺失、过期、重放或目标不符返回 403，额度校验异常返回 503；直接访问 Render 和伪造转发头无法绕过主 API。内部凭据接口独立限制每调用者 IP 每分钟 120 次，不占访客额度。Render 同时最多接纳 3 个未完成查询，给健康检查保留线程。
+- 成功查询按“来源 + IP”缓存，普通 API 默认 1 小时，低额度来源更长，旧结果回退最多 24 小时；网页报告最多 10 分钟，部分失败的 sources 报告最多 60 秒。验证路由不缓存。上游 429 返回有界 `Retry-After`；调用者超限时前端停止本轮网页重试。
 - Turnstile / reCAPTCHA 校验会附带平台提供的访客 IP（`remoteip`）。Turnstile token 上限 2,048 字符、请求体上限 4 KB；reCAPTCHA token 上限 8,192 字符、请求体上限 16 KB。请求体按流限长，HTTP 失败原因会回传给页面，避免被误显示为“无分数”。
 
 ## 部署

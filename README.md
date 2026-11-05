@@ -107,27 +107,7 @@ npm test
 
 后端状态查询遇到连接失败会重试一次；“重新检测”和人机验证的“再测一次”会重新检查后端。状态查询失败时，Radar 和验证码仍会尝试各自接口，连接失败按实际错误显示。Google 脚本加载、初始化、执行和服务端校验均有超时，失败后保留重试按钮；只有后端明确返回缺少密钥时才显示“未配置”。
 
-## 架构
-
-```mermaid
-flowchart LR
-  page["网页<br/>GitHub Pages"]
-  api["API Worker<br/>Cloudflare Worker · Sites"]
-  lookup["网页查询服务<br/>Render 容器 · Playwright"]
-  ext["Chrome 扩展（可选）<br/>访客浏览器会话"]
-  open["公开接口、DoH 与列表"]
-  keyed["需要密钥或仅 HTTP 的来源"]
-  pages["来源结果页<br/>IPinfo、IPSuper 等"]
-
-  page --> open
-  page --> api
-  page --> lookup
-  page -. 可选 .-> ext
-  api --> keyed
-  api -. 中转与唤醒 .-> lookup
-  lookup --> pages
-  ext --> pages
-```
+网页自动补全统一调用主 API 的 `/v1/page/*`，由主 API 唤醒 Chromium 容器并读取报告；IPinfo、IPSuper、其他来源和 GetIPIntel 的云端入口共享每个出口 IP 每分钟 30 次的查询额度，D1 原子计数跨运行实例共享。Render 在访问缓存和浏览器前必须消费主 API 生成的短期一次性凭据，直接请求 Render 会被拒绝。相同来源和目标 IP 的并发请求合并，成功报告从原始观察时间起最多保留 10 分钟。连接中断和临时服务错误会有限重试，调用者超限则显示等待原因并停止重试；整轮最长 4 分钟，切换查询会取消旧请求。本地页面优先使用 4188 服务，连接失败后使用同一线上入口。
 
 | 组件 | 位置 | 上线方式 |
 | --- | --- | --- |

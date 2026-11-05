@@ -5,19 +5,19 @@
  */
 const DEFAULT_ORIGIN = 'https://blackslience-reaper.github.io';
 const DEV_ORIGINS = new Set(['http://127.0.0.1:4187', 'http://localhost:4187']);
-const API_VERSION = 4;
+const API_VERSION = 5;
 const CACHE_SECONDS = 3600;
 // Every success is also kept this long as a fallback for when the upstream refuses (quota, rate limit, outage).
 const STALE_SECONDS = 24 * 3600;
 const RATE_WINDOW_MS = 60_000;
 const RATE_LIMIT = 30;
-const MAX_CALLER_BUCKETS = 10_000;
 const UPSTREAM_TIMEOUT = 12_000;
-const callers = new Map();
 // Small free quotas: keep their answers longer.
 const CACHE_FOR = Object.freeze({ ipqs: 12 * 3600, abuseipdb: 12 * 3600, ipregistry: 12 * 3600, ipdata: 12 * 3600, greynoise: 6 * 3600, crowdsec: 6 * 3600, getipintel: 6 * 3600, scamalytics: 6 * 3600, virustotal: 6 * 3600, vpnapi: 12 * 3600, iphub: 6 * 3600, ipapiis: 12 * 3600 });
-let lastSweep = 0;
 const PAGE_SERVICE = 'https://egress-observatory-lookup.onrender.com';
+const PAGE_PROVIDERS = new Set(['ipinfo', 'ipsuper', 'sources', 'getipintel']);
+const PAGE_ADMISSION = '/internal/page-admission';
+const PAGE_TICKET_MS = 120_000;
 const pageRequests = new Map();
 let pageWarmup = null;
 let pageWarmUntil = 0;
@@ -117,7 +117,7 @@ function failure(status, code, message, origin, extra = {}) {
 }
 
 function enabledRoutes(env) {
-  const routes = ['dbip', 'ip2location', 'ipapi', 'page-ipinfo', 'page-ipsuper'];
+  const routes = ['dbip', 'ip2location', 'ipapi', ...[...PAGE_PROVIDERS].map(provider => `page-${provider}`)];
   if (secret(env.PROXYCHECK_API_KEY)) routes.unshift('proxycheck');
   if (secret(env.ABUSEIPDB_API_KEY)) routes.push('abuseipdb');
   if (secret(env.IPQS_API_KEY)) routes.push('ipqs');
@@ -138,29 +138,83 @@ function enabledRoutes(env) {
   return routes;
 }
 
-// ---------- rate limit (per caller, per isolate, in memory) ----------
+// ---------- rate limit (atomic D1 counters shared by all isolates) ----------
 
 function trustedCaller(request) {
-  // CF-Connecting-IP is trusted only when the platform supplied request.cf metadata.
-  return request.cf ? canonicalIP(request.headers.get('CF-Connecting-IP')) : null;
+  // CF-Connecting-IP is set by Cloudflare's edge, which rejects a client-sent copy (error 1000). Sites passes no
+  // request.cf, but sets X-Real-IP to the same address and overwrites a client-sent one, so the pair is trusted.
+  // X-Forwarded-For is never used: it carries whatever the client sent.
+  const address = canonicalIP(request.headers.get('CF-Connecting-IP'));
+  return address && (request.cf || canonicalIP(request.headers.get('X-Real-IP')) === address) ? address : null;
 }
 
-function takeRateSlot(request) {
+let securitySchema = null;
+
+function securityReady() {
+  securitySchema ??= db.batch([
+    db.prepare('CREATE TABLE IF NOT EXISTS egress_security_salt (id INTEGER PRIMARY KEY CHECK (id = 1), salt TEXT NOT NULL)'),
+    db.prepare('INSERT OR IGNORE INTO egress_security_salt (id, salt) VALUES (1, ?)').bind(crypto.randomUUID() + crypto.randomUUID()),
+    db.prepare('CREATE TABLE IF NOT EXISTS egress_rate_limits (caller TEXT PRIMARY KEY, used INTEGER NOT NULL, expires INTEGER NOT NULL)'),
+    db.prepare('CREATE TABLE IF NOT EXISTS egress_page_tickets (ticket TEXT PRIMARY KEY, provider TEXT NOT NULL, ip TEXT NOT NULL, expires INTEGER NOT NULL)'),
+  ]).then(() => db.prepare('SELECT salt FROM egress_security_salt WHERE id = 1').first('salt'))
+    .catch(error => { securitySchema = null; throw error; });
+  return securitySchema;
+}
+
+async function takeRateSlot(request, scope = 'query', limit = RATE_LIMIT) {
+  const caller = trustedCaller(request);
+  if (!caller || !db) return { unavailable: true };
   const now = Date.now();
-  if (now - lastSweep >= RATE_WINDOW_MS) {
-    for (const [key, bucket] of callers) if (bucket.expires <= now) callers.delete(key);
-    lastSweep = now;
+  try {
+    const salt = await securityReady();
+    const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${salt}|${scope}|${caller}`));
+    const key = [...new Uint8Array(bytes)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+    // A single UPSERT increments and returns the counter under D1's write lock.
+    // Saturating rejected requests avoids overflow; rejected calls never extend the window.
+    const row = await db.prepare(`INSERT INTO egress_rate_limits (caller, used, expires) VALUES (?, 1, ?)
+      ON CONFLICT (caller) DO UPDATE SET
+        used = CASE WHEN egress_rate_limits.expires <= ? THEN 1 ELSE MIN(egress_rate_limits.used + 1, ?) END,
+        expires = CASE WHEN egress_rate_limits.expires <= ? THEN excluded.expires ELSE egress_rate_limits.expires END
+      RETURNING used, expires`).bind(key, now + RATE_WINDOW_MS, now, limit + 1, now).first();
+    if (!row) return { unavailable: true };
+    if (Math.random() < 0.02) await db.batch([
+      db.prepare('DELETE FROM egress_rate_limits WHERE expires <= ?').bind(now),
+      db.prepare('DELETE FROM egress_page_tickets WHERE expires <= ?').bind(now),
+    ]);
+    return { allowed: row.used <= limit, retryAfter: Math.max(1, Math.ceil((row.expires - now) / 1000)) };
+  } catch {
+    // Missing identity or unavailable storage must never disable quota protection.
+    return { unavailable: true };
   }
-  const key = trustedCaller(request) || 'unknown-caller';
-  let bucket = callers.get(key);
-  if (!bucket || bucket.expires <= now) {
-    if (!bucket && callers.size >= MAX_CALLER_BUCKETS) return { allowed: false, retryAfter: 60 };
-    bucket = { count: 0, expires: now + RATE_WINDOW_MS };
-    callers.set(key, bucket);
-  }
-  if (bucket.count >= RATE_LIMIT) return { allowed: false, retryAfter: Math.max(1, Math.ceil((bucket.expires - now) / 1000)) };
-  bucket.count += 1;
-  return { allowed: true };
+}
+
+async function pageAdmission(request) {
+  if (request.method !== 'POST') return failure(405, 'method-not-allowed', '仅支持 POST。', null);
+  const slot = await takeRateSlot(request, 'page-admission', 120);
+  if (slot.unavailable) return failure(503, 'rate-limit-unavailable', '请求额度校验暂时不可用。', null, { retryAfterSeconds: 5 });
+  if (!slot.allowed) return failure(429, 'caller-rate-limit', '请求频率过高。', null, { retryAfterSeconds: slot.retryAfter });
+  // A bounded JSON body carries a single-use capability, never a caller-supplied identity.
+  const reader = request.body?.getReader();
+  if (!reader) return failure(400, 'invalid-ticket', '查询凭据无效。', null);
+  let size = 0; let body = '';
+  try {
+    const decoder = new TextDecoder();
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      size += chunk.value.byteLength;
+      if (size > 256) { await reader.cancel(); return failure(400, 'invalid-ticket', '查询凭据无效。', null); }
+      body += decoder.decode(chunk.value, { stream: true });
+    }
+    body += decoder.decode();
+    const { ticket, provider, ip } = JSON.parse(body);
+    if (!/^[a-f0-9]{64}$/.test(ticket) || !PAGE_PROVIDERS.has(provider) || publicIP(ip) !== ip) return failure(403, 'invalid-ticket', '查询凭据无效。', null);
+    const admitted = await db.prepare('DELETE FROM egress_page_tickets WHERE ticket = ? AND provider = ? AND ip = ? AND expires > ? RETURNING ticket')
+      .bind(ticket, provider, ip, Date.now()).first();
+    return admitted ? new Response(null, { status: 204, headers: headers(null) }) : failure(403, 'invalid-ticket', '查询凭据无效或已使用。', null);
+  } catch {
+    return failure(403, 'invalid-ticket', '查询凭据无效。', null);
+  } finally { reader.releaseLock(); }
 }
 
 // ---------- upstream fetch ----------
@@ -669,9 +723,13 @@ async function warmPageService() {
 async function fetchPageReport(provider, ip) {
   try {
     await warmPageService();
+    await securityReady();
+    const ticket = (crypto.randomUUID() + crypto.randomUUID()).replaceAll('-', '');
+    await db.prepare('INSERT INTO egress_page_tickets (ticket, provider, ip, expires) VALUES (?, ?, ?, ?)')
+      .bind(ticket, provider, ip, Date.now() + PAGE_TICKET_MS).run();
     const response = await fetch(`${PAGE_SERVICE}/lookup/${provider}`, {
       method: 'POST', redirect: 'manual',
-      headers: { 'Content-Type': 'application/json', Origin: DEFAULT_ORIGIN },
+      headers: { 'Content-Type': 'application/json', Origin: DEFAULT_ORIGIN, 'X-Egress-Ticket': ticket },
       body: JSON.stringify({ ip }), signal: AbortSignal.timeout(110000),
     });
     if (!response.ok) {
@@ -681,9 +739,19 @@ async function fetchPageReport(provider, ip) {
         after: Math.min(15, Math.max(1, Number(response.headers.get('Retry-After')) || 3)) } };
     }
     const report = await response.json();
+    if (provider === 'getipintel' && report.time === undefined) report.time = Date.now();
     if (canonicalIP(report.ip) !== ip || !Number.isFinite(report.time) || Math.abs(Date.now() - report.time) > 600000) throw Error('page-target-or-time');
     let body;
-    if (provider === 'ipinfo') {
+    if (provider === 'getipintel') {
+      if (!Number.isFinite(report.probability) || report.probability < 0 || report.probability > 1) throw Error('page-schema');
+      body = { ip, time: report.time, probability: report.probability, risk: Math.round(report.probability * 100) };
+    } else if (provider === 'sources') {
+      if (!report.sources || typeof report.sources !== 'object' || Array.isArray(report.sources)) throw Error('page-schema');
+      const sources = Object.fromEntries(['iphub', 'ipqs', 'ipdata', 'ipregistry', 'dbip', 'scamalytics', 'ipapiis', 'ipquery', 'blackbox']
+        .filter(name => report.sources[name] && ['ok', 'error'].includes(report.sources[name].status)).map(name => [name, report.sources[name]]));
+      if (!Object.keys(sources).length) throw Error('page-schema');
+      body = { ip, time: report.time, sources };
+    } else if (provider === 'ipinfo') {
       if (typeof report.text !== 'string' || report.text.length > 120000 || !report.text.includes('Summary')) throw Error('page-schema');
       body = { ip, time: report.time, text: report.text };
     } else {
@@ -712,16 +780,18 @@ async function fetchPageReport(provider, ip) {
 }
 
 async function pageLookup(provider, ip, url, origin, ctx) {
-  const cacheKey = new Request(new URL(`/__egress_cache/page-${provider}-v2/${encodeURIComponent(ip)}`, url.origin));
+  const cacheKey = new Request(new URL(`/__egress_cache/page-${provider}-v3/${encodeURIComponent(ip)}`, url.origin));
   const cached = await readCache(cacheKey);
-  if (cached?.ip === ip && Date.now() - cached.time < 600000) return json({ ...cached, cacheHit: true }, 200, origin, { 'X-Data-Cache': 'HIT' });
+  const cacheMs = provider === 'sources' && Object.values(cached?.sources || {}).some(row => row.status !== 'ok') ? 60000 : 600000;
+  if (cached?.ip === ip && Date.now() - cached.time < cacheMs) return json({ ...cached, cacheHit: true }, 200, origin, { 'X-Data-Cache': 'HIT' });
   const key = `${provider}:${ip}`;
   let pending = pageRequests.get(key);
   if (!pending) {
     if (pageRequests.size >= 32) return failure(503, 'page-service-busy', '网页查询服务繁忙，请稍后重试。', origin, { retryAfterSeconds: 5 });
     pending = (async () => {
       const result = await fetchPageReport(provider, ip);
-      if (result.body) await writeCache(cacheKey, result.body, ctx, Math.max(1, Math.floor((result.body.time + 600000 - Date.now()) / 1000)));
+      const ttl = provider === 'sources' && Object.values(result.body?.sources || {}).some(row => row.status !== 'ok') ? 60000 : 600000;
+      if (result.body) await writeCache(cacheKey, result.body, ctx, Math.max(1, Math.floor((result.body.time + ttl - Date.now()) / 1000)));
       return result;
     })().finally(() => { pageRequests.delete(key); });
     pageRequests.set(key, pending);
@@ -735,16 +805,18 @@ async function pageLookup(provider, ip, url, origin, ctx) {
 
 async function handle(request, env, ctx) {
   useDatabase(env);
+  const url = new URL(request.url);
+  if (url.pathname === PAGE_ADMISSION) return pageAdmission(request);
   const sentOrigin = request.headers.get('Origin');
   const permitted = allowedOrigin(env, sentOrigin);
   if (!permitted) return failure(503, 'origin-configuration', '服务端来源配置无效。', null);
   if (sentOrigin !== null && sentOrigin !== permitted) return failure(403, 'origin-denied', '此来源未获允许。', null);
   const origin = sentOrigin === permitted ? permitted : null;
-  const url = new URL(request.url);
   const routes = enabledRoutes(env);
   const verifyKind = { '/v1/turnstile/verify': 'turnstile', '/v1/recaptcha/verify': 'recaptcha' }[url.pathname];
   const lookup = LOOKUPS[url.pathname];
-  const pageProvider = { '/v1/page/ipinfo': 'ipinfo', '/v1/page/ipsuper': 'ipsuper' }[url.pathname];
+  const pageName = url.pathname.startsWith('/v1/page/') ? url.pathname.slice('/v1/page/'.length) : '';
+  const pageProvider = PAGE_PROVIDERS.has(pageName) ? pageName : null;
   const known = url.pathname === '/health' || url.pathname === '/v1/radar' || Boolean(lookup) || Boolean(verifyKind) || Boolean(pageProvider);
   if (!known) return failure(404, 'not-found', '接口不存在。', origin);
   const method = verifyKind ? 'POST' : 'GET';
@@ -758,11 +830,12 @@ async function handle(request, env, ctx) {
   if (request.method !== method) return failure(405, 'method-not-allowed', `仅支持 ${method}。`, origin);
 
   if (url.pathname === '/health') {
-    return json({ status: 'ok', service: 'egress-observatory-api', apiVersion: API_VERSION, routes, providers: routes.filter(route => LOOKUPS[`/v1/${route}`]), cacheTTLSeconds: CACHE_SECONDS, staleSeconds: STALE_SECONDS, cacheStore: db ? 'd1' : typeof caches !== 'undefined' ? 'cache-api' : 'none', rateLimitPerMinute: RATE_LIMIT }, 200, origin);
+    return json({ status: 'ok', service: 'egress-observatory-api', apiVersion: API_VERSION, routes, providers: routes.filter(route => LOOKUPS[`/v1/${route}`]), cacheTTLSeconds: CACHE_SECONDS, staleSeconds: STALE_SECONDS, cacheStore: db ? 'd1' : typeof caches !== 'undefined' ? 'cache-api' : 'none', callerKnown: Boolean(trustedCaller(request)), rateLimitPerMinute: RATE_LIMIT, rateLimitStore: db ? 'd1' : 'unavailable', pageAdmission: 'single-use-ticket' }, 200, origin);
   }
 
-  const slot = takeRateSlot(request);
-  if (!slot.allowed) return failure(429, 'local-rate-limit', `请求频率超过每分钟 ${RATE_LIMIT} 次。`, origin, { retryAfterSeconds: slot.retryAfter });
+  const slot = await takeRateSlot(request);
+  if (slot.unavailable) return failure(503, 'rate-limit-unavailable', '调用者地址或额度校验暂时不可用，请稍后重试。', origin, { retryAfterSeconds: 5 });
+  if (!slot.allowed) return failure(429, 'caller-rate-limit', `当前出口 IP 的请求频率超过每分钟 ${RATE_LIMIT} 次。`, origin, { retryAfterSeconds: slot.retryAfter });
 
   if (verifyKind) {
     if (!routes.includes(`${verifyKind}-verify`)) return failure(503, 'not-configured', '服务端未配置该验证密钥。', origin);
