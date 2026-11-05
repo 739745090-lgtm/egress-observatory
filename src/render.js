@@ -2,7 +2,7 @@
 import { esc, countryName, maskIP, maskText, formatOffset, zoneOffset } from './util.js?v=4.1';
 import { SOURCES } from './sources.js?v=3.2';
 import { DNSBLS, CIDR_LISTS } from './blocklists.js';
-import { CATEGORIES, TYPE_LABEL } from './score.js?v=4.3';
+import { CATEGORIES, TYPE_LABEL } from './score.js?v=4.4';
 import { captchaConfig } from './captcha.js';
 
 const $ = id => document.getElementById(id);
@@ -305,7 +305,7 @@ export function renderChecks(run, result) {
     { label: '黑名单', level: loading(c.dnsbl.level), value: c.dnsbl.listed.length ? `收录 ${c.dnsbl.listed.length}` : c.dnsbl.checked ? '未收录' : '—', sub: c.dnsbl.checked ? `${c.dnsbl.checked} 个` : '', pts: itemPts(result, 'dnsbl'), title: c.dnsbl.listed.join('、') },
     asnTile(run, result, loading),
     neighbourTile(c.neighbours, result, loading),
-    { label: 'ASN 信誉', level: c.asnRep.level === 'none' ? (run.asnProfile && !run.asnProfile.routes ? 'none' : 'pending') : c.asnRep.level, value: c.asnRep.ratio === undefined ? '—' : c.asnRep.ratio >= 15 ? '较差' : c.asnRep.ratio >= 2 ? '一般' : c.asnRep.ratio < 0.5 ? '良好' : '正常', sub: c.asnRep.ratio === undefined ? '' : `滥用密度 ${c.asnRep.ratio} 倍均值`, pts: itemPts(result, 'asn-abuse') + itemPts(result, 'rpki'), title: c.asnRep.ratio === undefined ? '' : `整个 ASN 每万个地址有 ${c.asnRep.per10k} 个近期上榜，全网平均 ${c.asnRep.baseline}` },
+    { label: 'ASN 信誉', level: c.asnRep.level === 'none' ? (run.asnProfile && !run.asnProfile.routes ? 'none' : 'pending') : c.asnRep.level, value: c.asnRep.ratio === undefined ? '—' : c.asnRep.ratio >= 15 ? '较差' : c.asnRep.ratio >= 2 ? '一般' : c.asnRep.ratio <= 0.2 ? '优异' : c.asnRep.ratio < 0.5 ? '良好' : '正常', sub: c.asnRep.ratio === undefined ? '' : `滥用密度 ${c.asnRep.ratio} 倍均值`, pts: itemPts(result, 'asn-abuse') + itemPts(result, 'rpki'), title: c.asnRep.ratio === undefined ? '' : `整个 ASN 每万个地址有 ${c.asnRep.per10k} 个近期上榜，全网平均 ${c.asnRep.baseline}` },
     { label: '开放端口', level: loading(c.ports.level), value: c.ports.ports.length ? esc(c.ports.ports.slice(0, 4).join(', ')) + (c.ports.ports.length > 4 ? '…' : '') : c.ports.level === 'none' ? '—' : '未发现', sub: c.ports.tags.length ? esc(c.ports.tags.join(' ')) : '' },
     botTile(run, result),
   ];
@@ -320,7 +320,7 @@ function asnTile(run, result, loading) {
   const level = clash && rank[clash.level] > rank[c.level] ? clash.level : c.level;
   const value = clash?.level === 'bad' ? '冲突' : c.consistency ? (c.consistency.ok ? (c.consistency.warn || clash ? '需留意' : '一致') : '冲突') : '—';
   return { label: 'ASN 一致性', level: loading(level), value, sub: c.consistency || clash ? asnTag(run) : '',
-    pts: itemPts(result, 'asn-conflict') + itemPts(result, 'asn-transit') + itemPts(result, 'leased'), title: [c.consistency?.text, clash?.text].filter(Boolean).join('\n') };
+    pts: itemPts(result, 'asn-conflict') + itemPts(result, 'leased'), title: [c.consistency?.text, clash?.text].filter(Boolean).join('\n') };
 }
 
 /** Human share as a green bar from the left, bot share as a pink bar from the right, each share written under its end. */

@@ -83,12 +83,12 @@ test('a residential label inside a hosting ASN is flagged as a conflict', () => 
   assert.equal(result.checks.asn.consistency.ok, false);
 });
 
-test('a residential label under a transit / backbone ASN is flagged', () => {
+test('a residential label under a transit / backbone ASN is flagged but not deducted', () => {
   const result = score(clean({ asn: { asn: 4637, inferred: { cls: 'transit', label: '骨干 / 传输网', hosting: 0.28 } } }));
-  const transit = result.categories.find(c => c.id === 'network').items.find(i => i.id === 'asn-transit');
-  assert.ok(transit, 'expected asn-transit deduction');
-  // Neither side is a datacenter, so this costs far less than an asn-conflict.
-  assert.equal(transit.pts, 1);
+  // Neither side is a datacenter: the ASN tile warns, the score is untouched.
+  assert.equal(result.checks.asn.consistency.warn, true);
+  assert.equal(result.checks.asn.level, 'warn');
+  assert.equal(result.categories.find(c => c.id === 'network').items.length, 0);
 });
 
 test('registration country different from location means broadcast IP', () => {
@@ -310,6 +310,14 @@ test('strong positive evidence earns bonuses up to the cap, and type hints weigh
   assert.equal(result.grade.letter, 'S');
 
   assert.equal(result.bonus.items.find(i => i.id === 'eyeball').pts, 3);
+
+  // ASN reputation: +2 just under half the average abuse density, rising to +4 at a tenth of it.
+  assert.deepEqual(result.bonus.items.find(i => i.id === 'asn-clean'), { id: 'asn-clean', label: 'ASN 信誉优异', pts: 4, detail: '滥用密度只有全网平均的 0.1 倍', live: false });
+  const asnClean = ratio => score(clean({ asnRep: { size: 1 << 20, listed: 2, per10k: 0.02, baseline: 0.15, ratio, counts: {} } })).bonus.items.find(i => i.id === 'asn-clean');
+  assert.equal(asnClean(0.4).pts, 2.5);
+  assert.equal(asnClean(0.4).label, 'ASN 信誉良好');
+  assert.equal(asnClean(0.02).pts, 4);
+  assert.equal(asnClean(0.5), undefined);
 
   // A business line under a backbone ASN is a hint for the ASN tile, not a deduction.
   const backbone = clean({ asn: { asn: 4637, inferred: { cls: 'transit', label: '骨干 / 传输网', hosting: 0.28 } } });

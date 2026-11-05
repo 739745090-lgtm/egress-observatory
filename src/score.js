@@ -305,8 +305,8 @@ export function score(evidence) {
       asnConsistency = { ok: false, text: `标为${TYPE_LABEL[ipType]}，但 ${asnInfo.label || 'ASN'} 以机房为主` };
       add('network', 'asn-conflict', '类型与 ASN 不符', 5 * asnHosting, asnConsistency.text);
     } else if (homeLike && asnCls === 'transit') {
+      // A hint only: neither side is a datacenter, and leased space under the backbone is scored by the lease item.
       asnConsistency = { ok: true, warn: true, text: `标为${TYPE_LABEL[ipType]}，宣告方却是骨干 / 传输网：骨干网本身可靠，但家宽很少直接挂在它下面，这个标签存疑` };
-      add('network', 'asn-transit', '骨干网下的家宽标签存疑', 1, asnConsistency.text);
     } else if (ipType === 'hosting' && (asnCls === 'isp' || asnCls === 'mobile')) {
       asnConsistency = { ok: true, warn: true, text: '运营商 ASN 中的机房段（IDC / 云业务）' };
     } else if (homeLike && (asnCls === 'isp' || asnCls === 'mobile')) {
@@ -475,7 +475,10 @@ export function score(evidence) {
     plus('multi-clean', '多库一致干净', 2, `${anonCoverage} 个来源都未标记代理 / VPN，${riskEntries.length} 个风险分平均 ${risk}`);
   }
   if (nb && nb.checked >= 4 && !nb.count && !nb.whole.length && !nb.tor) plus('clean-neighbours', '邻居干净', 2, `${nb.prefix} 在 ${nb.checked} 个威胁列表里没有任何邻居上榜`);
-  if (rep && rep.ratio < 0.5 && rep.size >= 4096) plus('asn-clean', 'ASN 信誉良好', 2, `滥用密度只有全网平均的 ${rep.ratio} 倍`);
+  // +2 at half the internet-wide abuse density, rising to +4 at a tenth of it or less.
+  if (rep && rep.ratio < 0.5 && rep.size >= 4096) {
+    plus('asn-clean', rep.ratio <= 0.2 ? 'ASN 信誉优异' : 'ASN 信誉良好', r1(2 + 2 * clamp((0.5 - rep.ratio) / 0.4, 0, 1)), `滥用密度只有全网平均的 ${rep.ratio} 倍`);
+  }
   // A clean operator access line (home broadband / mobile) is what websites trust most. Up to +3, scaled by how sure
   // the type is and whether the ASN agrees; any anonymity or abuse evidence forfeits it.
   const safeRecord = !torHard && anonAny < 0.15 && abuser.E < 0.15 && (risk ?? 0) < 25 && !attack.length && !dnsblListed.some(item => item.kind === 'abuse');
