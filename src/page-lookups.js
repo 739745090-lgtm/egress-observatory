@@ -20,12 +20,12 @@ export async function lookupPage(provider, ip, signal, progress = () => {}) {
   signal.throwIfAborted();
   const cached = reports.get(key);
   if (cached && Date.now() - cached.time < 600000) return cached;
-  const relay = { url: `${API_BASE}/v1/page/${provider}?ip=${encodeURIComponent(ip)}`, method: 'GET', timeout: 195000 };
-  const direct = { url: `${PAGE_LOOKUP_CLOUD}/lookup/${provider}`, method: 'POST', timeout: 130000 };
+  const relay = { url: `${API_BASE}/v1/page/${provider}?ip=${encodeURIComponent(ip)}`, method: 'GET', timeout: 65000 };
+  const direct = { url: `${PAGE_LOOKUP_CLOUD}/lookup/${provider}`, method: 'POST', timeout: 145000 };
   const local = PAGE_LOOKUP_BASE !== PAGE_LOOKUP_CLOUD;
   const routes = local
-    ? [{ url: `${PAGE_LOOKUP_BASE}/lookup/${provider}`, method: 'POST', timeout: 110000 }, relay, relay, direct]
-    : [relay, relay, direct];
+    ? [{ url: `${PAGE_LOOKUP_BASE}/lookup/${provider}`, method: 'POST', timeout: 110000 }, { ...relay, timeout: 90000 }, { ...direct, timeout: 35000 }]
+    : [direct, relay, { ...direct, timeout: 25000 }];
   const deadline = AbortSignal.timeout(240000);
   const overall = AbortSignal.any([signal, deadline]);
   let lastError;
