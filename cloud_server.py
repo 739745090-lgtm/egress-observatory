@@ -36,7 +36,7 @@ def cors(response):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "providers": ["ipinfo", "ipsuper"]}
+    return {"status": "ok", "apiVersion": 2, "providers": ["ipinfo", "ipsuper"]}
 
 
 @app.route("/lookup/<provider>", methods=["POST", "OPTIONS"])

@@ -45,12 +45,14 @@ export async function lookupPage(provider, ip, signal, progress = () => {}) {
       catch {
         overall.throwIfAborted();
         const error = Error('网页查询服务暂未返回有效响应');
-        error.retryable = response.ok || transient.has(response.status);
+        error.retryable = response.ok || transient.has(response.status) || [403, 404].includes(response.status);
+        error.skipRoute = [403, 404].includes(response.status);
         throw error;
       }
       if (!response.ok) {
         const error = Error(report.error || `网页查询服务返回 HTTP ${response.status}`);
-        error.retryable = transient.has(response.status);
+        error.retryable = transient.has(response.status) || [403, 404].includes(response.status);
+        error.skipRoute = [403, 404].includes(response.status);
         const seconds = Number(response.headers.get('Retry-After') || report.retryAfterSeconds);
         error.delay = Number.isFinite(seconds) && seconds > 0 ? Math.min(seconds * 1000, 15000) : null;
         throw error;
@@ -71,6 +73,9 @@ export async function lookupPage(provider, ip, signal, progress = () => {}) {
       const retryable = error.retryable ?? (error instanceof TypeError || error.name === 'TimeoutError');
       if (!retryable) throw error;
       lastError = error;
+      if (error.skipRoute) {
+        while (routes[attempt + 1]?.url === route.url) attempt++;
+      }
       if (attempt + 1 < routes.length) {
         progress('服务连接暂时中断，正在重试');
         try { await pause(error.delay || 1000 * (attempt + 1), overall); }
