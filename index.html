@@ -9,8 +9,8 @@
   <meta name="referrer" content="strict-origin-when-cross-origin">
   <title>IP 纯净度检测 · Egress</title>
   <link rel="icon" href="./favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="./styles.css?v=2.9">
-  <script type="module" src="./src/main.js?v=4.23"></script>
+  <link rel="stylesheet" href="./styles.css?v=3.0">
+  <script type="module" src="./src/main.js?v=4.24"></script>
 </head>
 <body>
   <a class="skip-link" href="#main">跳到检测结果</a>
@@ -95,10 +95,14 @@
 
     <section class="card"><h2 class="card-title">地理位置多源对比 <small>标红的行与共识国家不同</small></h2><div id="geo" class="table-wrap"></div></section>
 
-    <section class="card"><h2 class="card-title">数据来源</h2><div id="sources"></div></section>
+    <section class="card">
+      <div class="src-top"><h2 class="card-title">数据来源 <small>按每个来源自己的结论着色 · 点击卡片打开它的查询页</small></h2>
+        <ul class="src-legend" aria-label="颜色含义"><li class="lg-good">干净</li><li class="lg-warn">需留意</li><li class="lg-bad">有风险</li><li class="lg-info">仅位置 / 注册信息</li><li class="lg-none">未返回</li></ul></div>
+      <div id="sources"></div>
+    </section>
 
     <footer class="footer">
-      <div><span class="muted">更多工具交叉验证：</span><span id="crosslinks" class="crosslinks"></span></div>
+      <div class="crosscheck"><span class="muted">更多工具交叉验证</span><span id="crosslinks" class="crosslinks"></span></div>
       <p class="muted small">风险明细补充：<a href="https://ipok.io/" target="_blank" rel="noopener noreferrer">IPOK</a> · IP Geolocation by <a href="https://db-ip.com" target="_blank" rel="noopener noreferrer">DB-IP</a> (CC BY 4.0) · <a href="https://www.ip2location.io" target="_blank" rel="noopener noreferrer">IP2Location.io</a> · GeoLite2 by <a href="https://www.maxmind.com" target="_blank" rel="noopener noreferrer">MaxMind</a> via RIPEstat · 国旗图片 flagcdn.com</p>
       <p class="muted small">分数是基于公开数据的可解释估计，不代表任何网站的真实风控结论。目标 IP 会发送给上表中的数据服务；页面不设账号、不做统计追踪。</p>
     </footer>

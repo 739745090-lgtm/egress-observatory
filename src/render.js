@@ -582,6 +582,7 @@ function sourceValue(id, d) {
     case 'ipguide': return `${d.prefix || ''}${d.rir ? ` · ${d.rir}` : ''}`;
     case 'shodan': return d.unseen ? '未被扫描' : (d.ports.length ? `${d.tags.join(' ') || '端口'} ${d.ports.slice(0, 3).join(', ')}` : '无开放端口') + (d.vulns?.length ? ` · ${d.vulns.length} 个 CVE` : '');
     case 'sfs': return d.appears ? `记录 ${d.appears} 次` : '无记录';
+    case 'otx': return d.benign ? '白名单 / 误报' : d.pulses ? `${d.pulses} 份威胁报告` : '无威胁报告';
     case 'greynoise': return d.classification === 'unseen' || d.noise === false ? '未观测到扫描' : [({ benign: '良性扫描', malicious: '恶意扫描', suspicious: '可疑扫描', unknown: '扫描' })[d.classification] || d.classification, d.name].filter(Boolean).join(' · ') || '—';
     case 'onionoo': return d.flags.tor ? 'Tor 出口' : d.torRelay ? 'Tor 中继（非出口）' : '不在 Tor 列表';
     case 'ptr': return d.hostname || '无 PTR';
@@ -599,36 +600,113 @@ function sourceValue(id, d) {
   }
 }
 
-function chip({ name, site, status, value, ms, error, listed, note }) {
-  const level = status === 'pending' ? 'pending' : status === 'skip' ? 'none' : status !== 'ok' ? 'off' : listed ? 'bad' : 'good';
-  return `<a class="src src-${level}" href="${esc(site)}" target="_blank" rel="noopener noreferrer" data-tip="${esc([name, error || value || '', note || '', '点击打开该来源的查询页'].filter(Boolean).join('\n'))}">
-    <span class="src-name">${level === 'pending' ? icon('pending') : ''}${esc(name)}</span>
+// ---------- source cards: each one coloured by what that source said about this IP ----------
+
+const GO = '<svg class="go" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 10.5l5-5M6.5 5.5h4v4"/></svg>';
+const TONE_WORD = { good: '干净', warn: '需留意', bad: '有风险', info: '仅位置 / 注册信息' };
+const tone = (level, label = '') => ({ level, label });
+
+/**
+ * One source's own verdict, never the overall score: bad (anonymous, abusive, high risk), warn (datacenter, medium risk,
+ * scanning), good (clean), info (location or registry only). Risk thresholds follow the score: ≥ 70 bad, ≥ 35 warn.
+ */
+function sourceTone(id, d, run) {
+  const f = d.flags || {};
+  const consensus = run.result?.summary?.country;
+  switch (id) {
+    case 'sfs': return d.appears ? tone('bad', '垃圾注册') : tone('good', '无记录');
+    case 'onionoo': return f.tor ? tone('bad', 'Tor 出口') : d.torRelay ? tone('warn', 'Tor 中继') : tone('good', '非 Tor');
+    case 'otx': return d.benign ? tone('good', '白名单') : d.pulses >= 3 ? tone('bad', '多份报告') : d.pulses ? tone('warn', '有报告') : tone('good', '无报告');
+    case 'greynoise':
+      if (d.classification === 'malicious') return tone('bad', '恶意扫描');
+      if (d.classification === 'unseen' || d.noise === false) return tone('good', '未观测到');
+      return tone('warn', d.classification === 'suspicious' ? '可疑扫描' : '扫描器');
+    case 'shodan': {
+      // Matches the score's port check: proxy / malware tags are a warning, open ports alone are information.
+      const tag = (d.tags || []).find(value => ['proxy', 'vpn', 'tor', 'compromised', 'malware'].includes(value));
+      if (d.unseen) return tone('good', '未被扫描');
+      if (tag) return tone('warn', { proxy: '代理端口', vpn: 'VPN 端口', tor: 'Tor', compromised: '已入侵', malware: '恶意软件' }[tag]);
+      if (d.vulns?.length) return tone('warn', 'CVE');
+      return d.ports?.length ? tone('info', '开放端口') : tone('good', '无开放端口');
+    }
+    case 'ripeprefix': return d.announced ? tone('info') : tone('warn', '未宣告');
+    case 'rdap': case 'riperir': case 'ipguide': case 'netatlas': return tone('info');
+  }
+  const risk = [d.risk, d.webRiskScore, d.webRiskPercent].find(Number.isFinite);
+  const use = d.usageType || d.type || d.aggregateUsageType;
+  if (f.tor) return tone('bad', 'Tor');
+  if (f.proxy) return tone('bad', '代理');
+  if (f.vpn) return tone('bad', 'VPN');
+  if (f.abuser) return tone('bad', '滥用记录');
+  if (d.spamhausListed === true) return tone('bad', 'Spamhaus');
+  if (risk >= 70) return tone('bad', '高风险');
+  if (risk >= 35) return tone('warn', '中风险');
+  if (f.relay) return tone('warn', '隐私中继');
+  if (f.crawler) return tone('warn', '爬虫');
+  if (f.hosting || use === 'hosting') return tone('warn', '机房');
+  if (Number.isFinite(risk)) return tone('good', '低风险');
+  // A home label the detection contradicts (same rule as the type matrix) is not a clean answer.
+  if ((use === 'residential' || use === 'isp' || use === 'mobile') && homeClash(run, 'usageType')) return tone('warn', use === 'mobile' ? '移动存疑' : '家宽存疑');
+  if (use === 'residential' || use === 'isp') return tone('good', '家宽');
+  if (use === 'mobile' || f.mobile) return tone('good', '移动网络');
+  if (consensus && d.country && d.country !== consensus && d.geoVote !== false) return tone('warn', '位置不同');
+  // An explicit "not a proxy / VPN / Tor" is a verdict too; flags left unknown are not.
+  if ([f.proxy, f.vpn, f.tor].includes(false)) return tone('good', '无代理标记');
+  return tone('info');
+}
+
+/** Type lists (datacenter / VPN ranges) only describe the IP; abuse lists count against it, and so do listed neighbours. */
+function listTone(item, def) {
+  if (item.listed) return tone(['datacenter', 'vpn'].includes(def.kind) ? 'warn' : 'bad');
+  const n = item.neighbours;
+  return tone(n && ['attack', 'spam', 'proxy'].includes(def.kind) && (n.whole || n.ips?.length) ? 'warn' : 'good');
+}
+
+function chip({ name, site, status, value, ms, error, note, tone: verdict }) {
+  const level = status === 'pending' ? 'pending' : status === 'skip' ? 'none' : status !== 'ok' ? 'off' : verdict.level;
+  const label = status === 'ok' ? verdict.label : '';
+  const tip = [name, error || value || '', status === 'ok' ? `结论：${label || TONE_WORD[level]}` : '', note || '', '点击打开该来源的查询页 ↗'];
+  const foot = (label ? `<span class="src-tag">${esc(label)}</span>` : '') + (status === 'ok' && typeof ms === 'number' ? `<span class="src-ms">${ms} ms</span>` : '');
+  return `<a class="src src-${level}" href="${esc(site)}" target="_blank" rel="noopener noreferrer" data-tip="${esc(tip.filter(Boolean).join('\n'))}">
+    <span class="src-head">${icon(level === 'off' ? 'none' : level)}<span class="src-name">${esc(name)}</span>${GO}</span>
     <span class="src-val">${status === 'ok' ? ipText(value || '✓') : status === 'pending' ? '等待返回' : esc(error || '不可用')}</span>
-    ${status === 'ok' && typeof ms === 'number' ? `<span class="src-ms">${ms} ms</span>` : ''}
+    ${foot ? `<span class="src-foot">${foot}</span>` : ''}
   </a>`;
 }
 
+function sourceGroup(title, cards) {
+  const answered = cards.filter(card => card.status === 'ok');
+  const tally = ['bad', 'warn', 'good'].map(level => [level, answered.filter(card => card.tone.level === level).length]).filter(([, count]) => count);
+  return `<div class="src-group"><h3>${esc(title)} <small>${answered.length} / ${cards.length}</small>${tally.map(([level, count]) => `<span class="tally tally-${level}">${count} ${TONE_WORD[level]}</span>`).join('')}</h3>
+    <div class="src-grid">${cards.map(chip).join('')}</div></div>`;
+}
+
 export function renderSources(run) {
+  const verdicts = {};
   const groups = [
     { id: 'intel', title: 'IP 情报库' }, { id: 'registry', title: '注册与路由' }, { id: 'threat', title: '威胁与扫描' },
   ];
-  const html = groups.map(group => {
-    const list = SOURCES.filter(source => source.group === group.id && run.sources[source.id]);
-    const ok = list.filter(source => run.sources[source.id].status === 'ok').length;
-    return `<div class="src-group"><h3>${esc(group.title)} <small>${ok} / ${list.length}</small></h3><div class="src-grid">
-      ${list.map(source => { const record = run.sources[source.id]; return chip({ name: source.name, site: source.site(run.ip), status: record.status, value: sourceValue(source.id, record.data), ms: record.ms, error: record.error, note: record.data?.sourceNote, listed: source.group === 'threat' && ['sfs', 'onionoo'].includes(source.id) && (record.data?.appears || record.data?.flags?.tor) }); }).join('')}
-    </div></div>`;
-  });
-  const bl = run.dnsbl;
-  const blOk = bl.filter(item => item.status === 'ok').length;
-  html.push(`<div class="src-group"><h3>DNS 黑名单 <small>${blOk} / ${bl.length}</small></h3><div class="src-grid">
-    ${bl.map(item => { const def = DNSBLS.find(list => list.id === item.id); return chip({ name: def.name, site: def.site(run.ip), status: item.status, value: item.listed ? `收录 ${item.codes.join(' ')}` : '未收录', error: item.error, listed: item.listed }); }).join('')}
-  </div></div>`);
-  const lists = run.lists;
-  html.push(`<div class="src-group"><h3>威胁 / 机房 IP 列表 <small>${lists.filter(item => item.status === 'ok').length} / ${lists.length}</small></h3><div class="src-grid">
-    ${lists.map(item => { const def = CIDR_LISTS.find(list => list.id === item.id); return chip({ name: def.name, site: def.site(), status: item.status, value: listValue(item), error: item.error, listed: item.listed && ['attack', 'spam', 'proxy', 'tor'].includes(def.kind) }); }).join('')}
-  </div></div>`);
+  const html = groups.map(group => sourceGroup(group.title, SOURCES.filter(source => source.group === group.id && run.sources[source.id]).map(source => {
+    const record = run.sources[source.id];
+    const verdict = record.status === 'ok' ? sourceTone(source.id, record.data, run) : tone('none');
+    if (record.status === 'ok') verdicts[source.id] = verdict;
+    return { name: source.name, site: source.site(run.ip), status: record.status, value: sourceValue(source.id, record.data), ms: record.ms, error: record.error, note: record.data?.sourceNote, tone: verdict };
+  })));
+  html.push(sourceGroup('DNS 黑名单', run.dnsbl.map(item => {
+    const def = DNSBLS.find(list => list.id === item.id);
+    return { name: def.name, site: def.site(run.ip), status: item.status, value: item.listed ? `收录 ${item.codes.join(' ')}` : '未收录', error: item.error, tone: tone(item.listed ? 'bad' : 'good') };
+  })));
+  html.push(sourceGroup('威胁 / 机房 IP 列表', run.lists.map(item => {
+    const def = CIDR_LISTS.find(list => list.id === item.id);
+    return { name: def.name, site: def.site(), status: item.status, value: listValue(item), error: item.error, tone: listTone(item, def) };
+  })));
   $('sources').innerHTML = html.join('');
+  // Cross-check links that are also sources carry the same colour.
+  document.querySelectorAll('#crosslinks a[data-src]').forEach(link => {
+    const verdict = verdicts[link.dataset.src];
+    link.dataset.tone = verdict?.level || '';
+    if (verdict) link.dataset.tip = `本次结果：${verdict.label || TONE_WORD[verdict.level]}`; else delete link.dataset.tip;
+  });
 }
 
 export function renderProgress(run, result) {
@@ -643,12 +721,13 @@ export function renderProgress(run, result) {
 
 export function crossLinks(ip) {
   const links = [
-    ['Scamalytics', `https://scamalytics.com/ip/${ip}`], ['IPQualityScore', `https://www.ipqualityscore.com/free-ip-lookup-proxy-vpn-test/lookup/${ip}`],
-    ['AbuseIPDB', `https://www.abuseipdb.com/check/${ip}`], ['Spur', `https://spur.us/context/${ip}`], ['ping0', `https://ping0.cc/ip/${ip}`],
+    ['Scamalytics', `https://scamalytics.com/ip/${ip}`, 'scamalytics'], ['IPQualityScore', `https://www.ipqualityscore.com/free-ip-lookup-proxy-vpn-test/lookup/${ip}`, 'ipqs'],
+    ['AbuseIPDB', `https://www.abuseipdb.com/check/${ip}`, 'abuseipdb'], ['Spur', `https://spur.us/context/${ip}`], ['ping0', `https://ping0.cc/ip/${ip}`],
     ['IPPure', `https://ippure.com/`], ['bgp.tools', `https://bgp.tools/prefix/${ip}`], ['Cisco Talos', `https://talosintelligence.com/reputation_center/lookup?search=${ip}`],
-    ['VirusTotal', `https://www.virustotal.com/gui/ip-address/${ip}`], ['Net.Coffee', `https://ip.net.coffee/ip/${ip}`],
+    ['VirusTotal', `https://www.virustotal.com/gui/ip-address/${ip}`, 'virustotal'], ['Net.Coffee', `https://ip.net.coffee/ip/${ip}`, 'netcoffee'],
   ];
-  $('crosslinks').innerHTML = links.map(([name, url]) => `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(name)} ↗</a>`).join('');
+  // The dot fills in once the matching source answers (renderSources).
+  $('crosslinks').innerHTML = links.map(([name, url, id]) => `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer"${id ? ` data-src="${id}"` : ''}><i aria-hidden="true"></i>${esc(name)}${GO}</a>`).join('');
 }
 
 /** Up to six recently queried addresses, newest first; clicking one checks it again. Masked like every other address. */
