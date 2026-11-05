@@ -305,7 +305,7 @@ test('strong positive evidence earns bonuses up to the cap, and type hints weigh
   const result = score(evidence);
   const ids = result.bonus.items.map(i => i.id);
   for (const id of ['multi-clean', 'clean-neighbours', 'asn-clean', 'eyeball', 'rpki']) assert.ok(ids.includes(id), `missing bonus ${id}`);
-  assert.equal(result.bonus.total, 8);
+  assert.equal(result.bonus.total, 10);
   assert.equal(result.score, 100);
   assert.equal(result.grade.letter, 'S');
 

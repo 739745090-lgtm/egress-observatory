@@ -1,7 +1,7 @@
 /**
  * Egress IP quality score. Pure function: evidence in, explained score out.
  *
- * Score = 92 + bonuses (≤ 8) − Σ min(category cap, Σ item points), Tor exits capped at 25.
+ * Score = 92 + bonuses (≤ 10) − Σ min(category cap, Σ item points), Tor exits capped at 25.
  * Voted items deduct by the weighted share of sources that flag them, so a lone hit among many misses costs little.
  * Safety comes first: anonymity, abuse, and the reputation of the /24 neighbours and the ASN carry most
  * of the weight; network type, ASN-type consistency and native/broadcast are small descriptive hints.
@@ -63,7 +63,7 @@ export const AI_BLOCKED = new Set(['CN', 'HK', 'MO', 'RU', 'BY', 'IR', 'KP', 'SY
 const NOW = () => Date.now();
 /** Score of a clean IP without positive evidence; bonuses (up to BONUS_CAP) lift it towards 100. */
 export const BASE = 92;
-export const BONUS_CAP = 8;
+export const BONUS_CAP = 10;
 
 import { zoneOffset } from './util.js';
 
