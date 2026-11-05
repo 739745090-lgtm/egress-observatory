@@ -268,6 +268,7 @@ test('IP helpers', () => {
   assert.equal(isPublicIP('10.1.2.3'), false);
   assert.equal(isPublicIP('2001:db8::1'), false);
   assert.equal(isPublicIP('8.8.8.8'), true);
+  assert.equal(isPublicIP('203.0.113.9'), false);
   assert.equal(cidrContains('203.0.113.0/24', '203.0.113.9'), true);
   assert.equal(cidrContains('203.0.112.0/24', '203.0.113.9'), false);
   assert.equal(reverseName('203.0.113.9'), '9.113.0.203');
