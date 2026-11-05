@@ -251,6 +251,7 @@ async function startRun(input, fetchPages = true) {
   const pageStatus = $('auto-page-status');
   pageStatus.textContent = '';
   if (fetchPages) {
+    const pageSignal=AbortSignal.any([signal,AbortSignal.timeout(240000)]);
     lookupIPOK(parsed.ip, signal).then(rows => {
       if (!alive()) return;
       ipokRows = rows; refreshTypes(); scheduleRender();
@@ -266,7 +267,7 @@ async function startRun(input, fetchPages = true) {
     const statuses = {ipinfo:'IPinfo 查询中', ipsuper:'IPSuper 查询中',ipok:'IPOK 第三方查询中',sources:'来源网页自动查询排队中'};
     const primaryPages = [];
     pageStatus.textContent = Object.values(statuses).join(' · ');
-    lookupChromePages(parsed.ip,signal,()=>{
+    lookupChromePages(parsed.ip,pageSignal,()=>{
       if(!alive())return;
       statuses.chrome='Chrome 正在自动读取第三方检测站及 IPHub、IPQualityScore';
       pageStatus.textContent=Object.values(statuses).join(' ｜ ');
@@ -285,12 +286,12 @@ async function startRun(input, fetchPages = true) {
     }).catch(error=>{if(alive() && !signal.aborted){statuses.chrome=error.message;pageStatus.textContent=Object.values(statuses).join(' ｜ ');}});
     for (const provider of ['ipinfo','ipsuper','sources']) {
       const name = provider === 'sources' ? '来源网页' : provider === 'ipinfo' ? 'IPinfo' : 'IPSuper';
-      const query = () => lookupPage(provider, parsed.ip, signal, message => {
+      const query = () => lookupPage(provider, parsed.ip, pageSignal, message => {
         if (!alive()) return;
         statuses[provider] = name + '：' + message;
         pageStatus.textContent = Object.values(statuses).join(' ｜ ');
       });
-      const pageTask = (provider === 'sources' ? Promise.allSettled(primaryPages).then(() => { signal.throwIfAborted(); return query(); }) : query())
+      const pageTask = (provider === 'sources' ? Promise.allSettled(primaryPages).then(() => { pageSignal.throwIfAborted(); return query(); }) : query())
         .then(report => {
           if (!alive()) return;
           if (!sameIP(report.ip, parsed.ip)) throw Error('返回的 IP 不匹配');
