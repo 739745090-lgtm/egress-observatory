@@ -20,24 +20,46 @@ function loadScript(src) {
     scripts.set(src, new Promise((resolve, reject) => {
       const script = document.createElement('script');
       script.src = src; script.async = true; script.defer = true; script.referrerPolicy = 'origin';
-      script.onload = resolve; script.onerror = () => { scripts.delete(src); script.remove(); reject(new Error('脚本加载失败')); };
+      const finish = error => {
+        clearTimeout(timer);
+        script.onload = script.onerror = null;
+        if (error) { scripts.delete(src); script.remove(); reject(error); }
+        else resolve();
+      };
+      const timer = setTimeout(() => finish(new Error('脚本加载超时')), 15000);
+      script.onload = () => finish();
+      script.onerror = () => finish(new Error('脚本加载失败'));
       document.head.append(script);
     }));
   }
   return scripts.get(src);
 }
 
+async function withTimeout(task, ms, message) {
+  let timer;
+  try {
+    return await Promise.race([task, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(message)), ms);
+    })]);
+  } finally { clearTimeout(timer); }
+}
+
 async function verify(kind, token, health) {
-  if (!health?.routes?.includes(`${kind}-verify`)) return { verified: false, unconfigured: true, reason: '服务端未配置密钥，只记录浏览器端结果' };
+  if (health && !health.routes?.includes(`${kind}-verify`)) return { verified: false, unconfigured: true, reason: '服务端未配置密钥，只记录浏览器端结果' };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
   try {
     const response = await fetch(`${API_BASE}/v1/${kind}/verify`, {
       method: 'POST', credentials: 'omit', referrerPolicy: 'no-referrer',
+      signal: controller.signal,
       headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }),
     });
     const data = await response.json();
+    if (response.status === 503 && data.errorCode === 'not-configured') return { verified: false, unconfigured: true, reason: data.error };
     if (!response.ok) return { verified: false, reason: `校验接口 HTTP ${response.status}：${data.error || '请求未被接受'}` };
     return { verified: true, ...data };
-  } catch { return { verified: false, reason: '服务端校验请求失败' }; }
+  } catch { return { verified: false, reason: controller.signal.aborted ? '服务端校验超时，请重试' : '服务端校验连接失败，请重试' }; }
+  finally { clearTimeout(timer); }
 }
 
 export async function runTurnstile(container, health) {
@@ -92,13 +114,13 @@ export async function runRecaptcha(health) {
     catch { return { status: 'error', error: '无法加载 reCAPTCHA（Google 不可达）' }; }
   }
   try {
-    await new Promise(resolve => window.grecaptcha.ready(resolve));
-    const token = await window.grecaptcha.execute(captchaConfig.recaptcha, { action: 'ip_check' });
+    await withTimeout(new Promise(resolve => window.grecaptcha.ready(resolve)), 20000, 'reCAPTCHA 初始化超时，请重试');
+    const token = await withTimeout(window.grecaptcha.execute(captchaConfig.recaptcha, { action: 'ip_check' }), 20000, 'reCAPTCHA 执行超时，请重试');
     const server = await verify('recaptcha', token, health);
     if (!server.verified) return server.unconfigured
       ? { status: 'skip', reason: server.reason, pendingSecret: true }
       : { status: 'error', error: server.reason || '服务端校验请求失败' };
     if (!server.success || typeof server.score !== 'number') return { status: 'error', error: `校验失败（${(server.errorCodes || []).join(', ') || '无分数'}）` };
     return { status: 'ok', score: server.score, action: server.action, summary: `Google 给出 ${server.score.toFixed(1)} 分（1.0 最像真人）` };
-  } catch { return { status: 'error', error: 'reCAPTCHA 执行失败' }; }
+  } catch (error) { return { status: 'error', error: error.message?.includes('超时') ? error.message : 'reCAPTCHA 执行失败，请重试' }; }
 }

@@ -6,29 +6,43 @@ import { API_BASE, PAGE_LOOKUP_BASE, PAGE_LOOKUP_CLOUD } from '../config.js?v=cl
 import { getJSON, parseIP, isPublicIP, sameIP, maskIP, maskText } from './util.js?v=4.1';
 import { SOURCES, runSource } from './sources.js?v=3.2';
 import { DNSBLS, checkDNSBL, CIDR_LISTS, checkCIDRList, asnAbuseDensity } from './blocklists.js';
-import { fetchASN, inferASN, detectLease } from './asn.js';
+import { fetchASN, inferASN, detectLease } from './asn.js?v=4.2';
 import { detectEgress, summarizeEgress, probeWebRTC, probeDNS, classifyDNS, probeTCP, probeEnvironment, probeIPv6, classifyIPv6, traceProbe } from './probes.js';
-import { runTurnstile, runRecaptcha } from './captcha.js';
+import { runTurnstile, runRecaptcha } from './captcha.js?v=4.2';
 import { score } from './score.js?v=4.0';
-import * as view from './render.js?v=4.1';
+import * as view from './render.js?v=4.2';
 
 const $ = id => document.getElementById(id);
 const app = {
   masked: localStorage.getItem('egress-mask') === '1',
-  egress: null, egressPromise: null, health: null, healthPromise: null, run: null, frame: 0,
+  egress: null, egressPromise: null, health: null, healthPromise: null, healthPending: false, healthAt: 0, run: null, frame: 0,
 };
 
 // ---------- backend capabilities ----------
 
-app.healthPromise = Promise.race([
-  getJSON(`${API_BASE}/health`, { timeout: 6000 }).then(result => {
-    if (!result.ok) return null;
-    // Older deployments list `providers`; newer ones list every enabled `routes` entry.
-    const routes = result.data.routes || result.data.providers || [];
-    return { ...result.data, routes };
-  }),
-  new Promise(resolve => setTimeout(() => resolve(null), 6500)),
-]).then(health => { app.health = health; return health; });
+function refreshHealth(force = false) {
+  if (app.healthPending) return app.healthPromise;
+  if (!force && app.health && Date.now() - app.healthAt < 60000) return Promise.resolve(app.health);
+  app.healthPending = true;
+  app.healthPromise = (async () => {
+    for (const timeout of [6000, 10000]) {
+      const result = await getJSON(`${API_BASE}/health`, { timeout });
+      if (result.ok && result.data?.service === 'egress-observatory-api') {
+        // Only a valid capability response can establish that a route is unconfigured.
+        const routes = result.data.routes || result.data.providers;
+        if (Array.isArray(routes)) return { ...result.data, routes };
+      }
+      if (result.status === 429) break;
+    }
+    return null;
+  })().then(health => {
+    app.health = health;
+    app.healthAt = Date.now();
+    return health;
+  }).finally(() => { app.healthPending = false; });
+  return app.healthPromise;
+}
+refreshHealth();
 
 // ---------- evidence & scoring ----------
 
@@ -154,13 +168,14 @@ function scheduleRender() {
 async function startRun(input, fetchPages = true) {
   const parsed = parseIP(input);
   if (!parsed || !isPublicIP(parsed.ip)) { $('status').textContent = '请输入有效的公网 IPv4 或 IPv6 地址。'; return; }
+  const healthReady = refreshHealth(true);
   app.run?.controller.abort();
   const controller = new AbortController();
   const signal = controller.signal;
   const egress = app.egress || await Promise.race([app.egressPromise, new Promise(resolve => setTimeout(resolve, 4000))]) || app.egress;
   const self = Boolean(egress?.ips?.some(ip => sameIP(ip, parsed.ip)));
   const run = {
-    ip: parsed.ip, v: parsed.v, self, controller, startedAt: Date.now(),
+    ip: parsed.ip, v: parsed.v, self, controller, healthReady, startedAt: Date.now(),
     sources: {}, dnsbl: [], lists: [], asn: null, asnProfile: null, probes: {}, result: null,
   };
   app.run = run;
@@ -173,7 +188,7 @@ async function startRun(input, fetchPages = true) {
   $('ipinfo-message').textContent = '';
   $('ipsuper-query').href = 'https://ipsuper.com/?ip=' + encodeURIComponent(parsed.ip);
 
-  const ctx = { signal, healthReady: app.healthPromise, sourceReady: new Map() };
+  const ctx = { signal, healthReady, sourceReady: new Map() };
   const active = SOURCES.filter(source => !source.selfOnly || self);
   for (const source of active) run.sources[source.id] = { status: 'pending' };
   run.dnsbl = DNSBLS.map(list => ({ id: list.id, name: list.name, kind: list.kind, status: 'pending' }));
@@ -189,7 +204,7 @@ async function startRun(input, fetchPages = true) {
     if (!asn) return;
     asnStarted = true;
     const prefix = run.sources.ripeprefix?.data?.prefix || run.sources.ipguide?.data?.prefix || run.sources.netatlas?.data?.prefix || null;
-    app.healthPromise.then(health => fetchASN(asn, { signal, prefix, health })).then(profile => {
+    healthReady.then(health => fetchASN(asn, { signal, prefix, health })).then(profile => {
       if (!alive()) return;
       run.asn = profile; scheduleRender();
       if (profile.routes?.length) asnAbuseDensity(profile.routes, signal).then(rep => { if (alive() && rep) { run.asnRep = rep; scheduleRender(); } });
@@ -317,9 +332,10 @@ async function runProbes(run, signal, alive) {
   probeIPv6(run.v === 4 ? egress?.v6 : egress?.v4, run.ip, signal).then(value => update('ipv6', value));
 }
 
-async function runCaptcha(run, kind, alive = () => app.run === run) {
+async function runCaptcha(run, kind, alive = () => app.run === run, refreshBackend = false) {
   run.probes[kind] = null; scheduleRender();
-  const health = await app.healthPromise;
+  const health = await (refreshBackend ? refreshHealth(true) : run.healthReady);
+  if (!alive()) return;
   const value = kind === 'turnstile' ? await runTurnstile($('turnstile-slot'), health) : await runRecaptcha(health);
   if (alive()) { run.probes[kind] = value; scheduleRender(); }
 }
@@ -368,7 +384,7 @@ document.addEventListener('click', event => {
   if (check) { startRun(check.dataset.check); window.scrollTo({ top: 0, behavior: 'smooth' }); }
   if (event.target.closest('[data-self-check]')) $('self-check').click();
   const rerun = event.target.closest('[data-rerun]');
-  if (rerun && app.run) runCaptcha(app.run, rerun.dataset.rerun);
+  if (rerun && app.run) runCaptcha(app.run, rerun.dataset.rerun, undefined, true);
 });
 
 // ---------- boot ----------

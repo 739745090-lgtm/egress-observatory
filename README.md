@@ -34,6 +34,8 @@
 
 `config.js` 只放公开值：后端地址、Turnstile site key、reCAPTCHA site key。key 留空时对应实测显示“未配置”，不影响其他评分。两个 key 都要登记这些域名：`blackslience-reaper.github.io`、`127.0.0.1`、`localhost`。密钥只放在后端运行时 secret，见 [api/README.md](api/README.md)。
 
+后端状态查询遇到连接失败会重试一次；“重新检测”和人机验证的“再测一次”会重新检查后端。状态查询失败时，Radar 和验证码仍会尝试各自接口，连接失败按实际错误显示。Google 脚本加载、初始化、执行和服务端校验均有超时，失败后保留重试按钮；只有后端明确返回缺少密钥时才显示“未配置”。
+
 ## 本地运行
 
 ```bash

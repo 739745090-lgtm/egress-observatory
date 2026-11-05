@@ -248,9 +248,9 @@ function botTile(run, result) {
   const radar = run.asnProfile?.sources?.radar;
   const asn = run.asnProfile?.asn ? `AS${run.asnProfile.asn}` : 'ASN';
   if (b.bot === null) {
-    const value = !run.asnProfile ? '检测中' : radar === 'skip' ? '未配置' : '无数据';
+    const value = !run.asnProfile ? '检测中' : radar === 'skip' ? '未配置' : run.asnProfile.radarNoData ? '无数据' : '查询失败';
     const title = radar === 'skip' ? '人机流量需要后端配置 CF_RADAR_TOKEN（Cloudflare Radar 只读 token）后才能查询'
-      : radar === 'error' ? `Cloudflare Radar 没有 ${asn} 的流量数据` : '';
+      : radar === 'error' ? run.asnProfile.radarError || `Cloudflare Radar 查询 ${asn} 失败，请重新检测` : '';
     return { label: '人机流量', level: run.asnProfile ? 'none' : 'pending', value, sub: 'Cloudflare Radar', title, wide: true };
   }
   const human = Math.round(b.human * 100);
@@ -349,7 +349,7 @@ function renderCaptcha(run, result) {
     return `<div class="cap lv-${level}">
       <div class="cap-head">${icon(level)}<strong>${esc(title)}</strong><span class="cap-result">${esc(head)}</span>${pen(itemPts(result, kind))}</div>
       <p>${body}</p>${extra || ''}
-      ${data && data.status !== 'skip' ? `<button type="button" class="ghost small" data-rerun="${kind}">再测一次</button>` : ''}
+      ${data && (data.status !== 'skip' || data.pendingSecret) ? `<button type="button" class="ghost small" data-rerun="${kind}">再测一次</button>` : ''}
     </div>`;
   };
   const tsNote = ts?.test ? '<p class="muted small">本地测试密钥：结果恒为通过，仅用于验证流程。</p>' : ts?.server && !ts.server.verified ? `<p class="muted small">${esc(ts.server.reason)}</p>` : '';

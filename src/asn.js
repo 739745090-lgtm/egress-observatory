@@ -161,7 +161,7 @@ export async function fetchASN(asn, { signal, prefix, health } = {}) {
     pdb: getJSON(`https://www.peeringdb.com/api/net?asn=${asn}`, { signal, timeout: 12000 }),
     rdap: getJSON(`https://rdap.org/autnum/${asn}`, { signal, timeout: 12000, init: { headers: { Accept: 'application/rdap+json' } } }),
     rpki: prefix ? ripe('rpki-validation', { resource: `AS${asn}`, prefix }) : Promise.resolve(null),
-    radar: health?.routes?.includes('radar') ? getJSON(`${API_BASE}/v1/radar?asn=${asn}`, { signal, timeout: 12000 }) : Promise.resolve(null),
+    radar: !health || health.routes?.includes('radar') ? getJSON(`${API_BASE}/v1/radar?asn=${asn}`, { signal, timeout: 15000 }) : Promise.resolve(null),
     // Announced IPv4 routes: the ASN's address space for the abuse-density reputation check.
     guide: getJSON(`https://ip.guide/AS${asn}`, { signal, timeout: 15000 }),
   };
@@ -169,6 +169,12 @@ export async function fetchASN(asn, { signal, prefix, health } = {}) {
   const results = Object.fromEntries(entries);
   const profile = { asn, sources: {} };
   for (const [key, result] of entries) profile.sources[key] = result ? (result.ok ? 'ok' : 'error') : 'skip';
+  if (results.radar && !results.radar.ok) {
+    const result = results.radar;
+    if (result.status === 503 && result.data?.errorCode === 'not-configured') profile.sources.radar = 'skip';
+    profile.radarError = result.data?.error || result.error;
+    profile.radarNoData = result.status === 404 && result.data?.errorCode === 'no-data';
+  }
 
   if (results.overview?.ok) profile.holder = text(results.overview.data?.data?.holder);
   if (results.routing?.ok) {
