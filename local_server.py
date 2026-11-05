@@ -23,7 +23,7 @@ def lookup(ip, provider):
             options["channel"] = "chrome"
         browser = api.chromium.launch(**options)
         try:
-            page = browser.new_page()
+            page = browser.new_page(locale="zh-CN")
             if provider == "ipinfo":
                 response = page.goto("https://ipinfo.io/" + ip, wait_until="domcontentloaded", timeout=30000)
                 if not response or response.status != 200 or urlsplit(page.url).hostname != "ipinfo.io":
@@ -33,12 +33,13 @@ def lookup(ip, provider):
                 return {"ip": ip, "text": raw[:120000], "time": int(time.time()*1000)}
             page.goto("https://ipsuper.com/?ip=" + ip, wait_until="domcontentloaded", timeout=30000)
             page.wait_for_function("""ip => {
-              const targetShown = [...document.querySelectorAll('a[href]')].some(a => a.textContent.trim() === ip && new URL(a.href, location.href).searchParams.get('ip') === ip);
+              const inputMatches = [...document.querySelectorAll('input')].some(el => el.value.trim() === ip);
+              const targetShown = inputMatches || [...document.querySelectorAll('a[href]')].some(a => a.textContent.trim() === ip && new URL(a.href, location.href).searchParams.get('ip') === ip);
               const grid = document.querySelector('.attributes-grid');
               return targetShown && new URL(location.href).searchParams.get('ip') === ip && grid?.innerText.includes('公司类型')
-                && [...grid.querySelectorAll('.grid-cell')].some(c => /家宽|机房|商业|移动|教育|政府/.test(c.innerText))
+                && ([...grid.querySelectorAll('.grid-cell')].some(c => /家宽|机房|商业|移动|教育|政府/.test(c.innerText)) || document.querySelector('.risk-scores .right-label[title]'))
                 ;
-            }""", arg=ip, timeout=40000)
+            }""", arg=ip, timeout=60000)
             return page.locator(".attributes-grid").filter(has_text="公司类型").first.evaluate("""grid => {
               const headers = [...grid.querySelectorAll(':scope > .grid-header')].slice(1).map(n=>n.innerText.trim());
               const rows = {};
@@ -48,11 +49,21 @@ def lookup(ip, provider):
                 while(cell?.classList.contains('grid-cell')) { values.push(cell.innerText.trim()); cell=cell.nextElementSibling; }
                 if(values.length===headers.length) rows[label.innerText.trim()]=values;
               }
-              return {headers,rows,ip:new URL(location.href).searchParams.get('ip'),time:Date.now()};
+              const riskPercent = {};
+              for (const row of document.querySelectorAll('.risk-scores .info-row')) {
+                const name = row.querySelector('.info-label')?.textContent.trim();
+                const title = row.querySelector('.right-label')?.title || '';
+                const match = /^风险\s*\(([0-9.]+)%\)$/.exec(title);
+                if (name && match && Number(match[1]) <= 100) riskPercent[name] = Number(match[1]);
+              }
+              return {headers,rows,riskPercent,ip:new URL(location.href).searchParams.get('ip'),time:Date.now()};
             }""")
         except Exception:
             if page:
-                print(provider, page.title(), flush=True)
+                print(provider, page.title(), "grids", page.locator(".attributes-grid").count(),
+                      "risk_rows", page.locator(".risk-scores .info-row").count(), flush=True)
+                if provider == "ipsuper" and page.locator(".attributes-grid").count():
+                    print("type grid:", page.locator(".attributes-grid").first.inner_text()[:350], flush=True)
             raise
         finally:
             browser.close()
