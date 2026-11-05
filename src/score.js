@@ -432,14 +432,14 @@ export function score(evidence) {
   if (tz && ipTimezone && typeof tz.offset === 'number' && ipOffset !== null) {
     const mismatch = tz.offset !== ipOffset;
     live.tz = mismatch ? 'warn' : 'good';
-    if (mismatch) add('live', 'tz', '时区与 IP 不符', 6, `浏览器 ${tz.zone}，IP 所在 ${ipTimezone}`);
+    if (mismatch) add('live', 'tz', '时区与 IP 不符', 3, `浏览器 ${tz.zone}，IP 所在 ${ipTimezone}`);
   }
   const lang = probes.lang;
   const countryLangs = COUNTRY_LANGS[country] || null;
   if (lang?.languages?.length && countryLangs) {
     const match = lang.languages.some(code => countryLangs.includes(code.split('-')[0].toLowerCase()));
     live.lang = match ? 'good' : 'warn';
-    if (!match) add('live', 'lang', '语言与 IP 地区不符', 2, `浏览器 ${lang.languages.slice(0, 3).join(', ')}，${country} 常用 ${countryLangs.join('/')}`);
+    if (!match) add('live', 'lang', '语言与 IP 地区不符', 1, `浏览器 ${lang.languages.slice(0, 3).join(', ')}，${country} 常用 ${countryLangs.join('/')}`);
   }
   const ipv6 = probes.ipv6;
   if (ipv6?.status === 'ok' && ipv6.mismatch) {
@@ -622,7 +622,7 @@ export function score(evidence) {
       else hit('部分数据库定位在不支持地区', 40 * blockedGeo.reduce((sum, item) => sum + item.share, 0), blockedGeo.map(item => `${item.value}：${item.by.join('、')}`).join('；'));
       s.webrtc(35); s.dns(12, 25, 3); s.ecs(20); s.ipv6(15);
       s.anon(33); s.hosting(15); s.risk(0.4); s.abuse(15);
-      s.tcp(12, 5); s.tz(8); s.lang(3); s.turnstile(10, 25); s.bots(8);
+      s.tcp(12, 5); s.tz(4); s.lang(1.5); s.turnstile(10, 25); s.bots(8);
       s.tor(60, 10, 'Tor 出口，AI 服务会拒绝或封号');
     }),
     // CAPTCHA frequency follows IP reputation; a measured pass outweighs the predictions.
@@ -640,7 +640,7 @@ export function score(evidence) {
       s.risk(0.6); s.anon(39); s.hosting(20); s.abuse(15);
       if (sfs?.appears > 0) hit('垃圾注册记录', 12 + (sfsRecent ? 5 : 0), `StopForumSpam 记录 ${sfs.appears} 次${sfs.lastseen ? `，最近 ${sfs.lastseen.slice(0, 10)}` : ''}`);
       s.broadcast(6); s.geoSplit(10); s.lease(5); s.shared(8); s.bots(8);
-      s.tz(12); s.lang(5); s.webrtc(20); s.dns(10, 15, 3); s.tcp(10, 5); s.ipv6(10);
+      s.tz(6); s.lang(2.5); s.webrtc(20); s.dns(10, 15, 3); s.tcp(10, 5); s.ipv6(10);
       s.tor(70, 5, 'Tor 出口，注册和支付基本都会被拦截');
     }),
     // Direct SMTP: mail blacklists, dynamic (home / mobile) ranges and PTR decide; a server IP is normal here.
@@ -658,7 +658,7 @@ export function score(evidence) {
     social: meter(homeE + mobileE >= 0.5 ? '原生住宅 / 移动网络，适合社媒运营' : '没有明显风控信号', (hit, gate, s) => {
       s.hosting(55); s.anon(52); s.broadcast(20); s.geoSplit(15); s.business(5); s.lease(8); s.shared(15);
       s.risk(0.25); s.abuse(10); s.bots(8);
-      s.tz(15); s.lang(6); s.webrtc(20); s.dns(10, 15, 4); s.ipv6(15); s.tcp(12, 6);
+      s.tz(8); s.lang(3); s.webrtc(20); s.dns(10, 15, 4); s.ipv6(15); s.tcp(12, 6);
       s.tor(80, 5, 'Tor 出口，社媒账号会被直接限制');
     }),
   };
