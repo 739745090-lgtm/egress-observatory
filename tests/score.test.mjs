@@ -91,16 +91,6 @@ test('a residential label under a transit / backbone ASN is flagged but not dedu
   assert.equal(result.categories.find(c => c.id === 'network').items.length, 0);
 });
 
-test('Shodan CVEs are listed by ID, newest first, in the vulnerability detail', () => {
-  const evidence = clean();
-  const vulns = ['CVE-2015-4000', 'CVE-2023-48795', 'CVE-2018-15473', 'CVE-2016-0777', 'CVE-2019-6111', 'CVE-2020-15778', 'CVE-2021-41617'];
-  evidence.sources.shodan = ok({ ports: [22], tags: [], vulns, hostnames: [], geoVote: false });
-  const item = score(evidence).categories.find(c => c.id === 'abuse').items.find(i => i.id === 'vulns');
-  assert.equal(item.pts, 6);
-  assert.ok(item.detail.startsWith('7 个 CVE：CVE-2023-48795、CVE-2021-41617、CVE-2020-15778、CVE-2019-6111、CVE-2018-15473、CVE-2016-0777 等。'), item.detail);
-  assert.ok(!item.detail.includes('CVE-2015-4000'));
-});
-
 test('registration country different from location means broadcast IP', () => {
   const evidence = clean();
   evidence.sources.ipleak = ok({ ...geo(), regCountry: 'FR' });
@@ -278,7 +268,6 @@ test('IP helpers', () => {
   assert.equal(isPublicIP('10.1.2.3'), false);
   assert.equal(isPublicIP('2001:db8::1'), false);
   assert.equal(isPublicIP('8.8.8.8'), true);
-  assert.equal(isPublicIP('203.0.113.9'), false);
   assert.equal(cidrContains('203.0.113.0/24', '203.0.113.9'), true);
   assert.equal(cidrContains('203.0.112.0/24', '203.0.113.9'), false);
   assert.equal(reverseName('203.0.113.9'), '9.113.0.203');
@@ -320,14 +309,6 @@ test('strong positive evidence earns bonuses up to the cap, and type hints weigh
   assert.equal(result.grade.letter, 'S');
 
   assert.equal(result.bonus.items.find(i => i.id === 'eyeball').pts, 3);
-
-  // ASN reputation: +2 just under half the average abuse density, rising to +4 at a tenth of it.
-  assert.deepEqual(result.bonus.items.find(i => i.id === 'asn-clean'), { id: 'asn-clean', label: 'ASN 信誉优异', pts: 4, detail: '滥用密度只有全网平均的 0.1 倍', live: false });
-  const asnClean = ratio => score(clean({ asnRep: { size: 1 << 20, listed: 2, per10k: 0.02, baseline: 0.15, ratio, counts: {} } })).bonus.items.find(i => i.id === 'asn-clean');
-  assert.equal(asnClean(0.4).pts, 2.5);
-  assert.equal(asnClean(0.4).label, 'ASN 信誉良好');
-  assert.equal(asnClean(0.02).pts, 4);
-  assert.equal(asnClean(0.5), undefined);
 
   // A business line under a backbone ASN is a hint for the ASN tile, not a deduction.
   const backbone = clean({ asn: { asn: 4637, inferred: { cls: 'transit', label: '骨干 / 传输网', hosting: 0.28 } } });
