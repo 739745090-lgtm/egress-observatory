@@ -60,17 +60,17 @@ test('voted deductions follow the weighted share: 1 of 8 costs far less than 1 o
   const half = clean();
   half.sources.shodan = shodan;
   half.sources.ipquery = ok({ ...geo(), flags: f({ vpn: false, tor: false, hosting: false }), risk: 0 });
-  // H = 0.5 / (1 − 0.5) = 1, N = 1.0 (Proxycheck) → E = 0.5 → 10 of 20
-  assert.equal(proxyItem(half).pts, 10);
+  // H = 0.5 / (1 − 0.5) = 1, N = 1.0 (Proxycheck) → E = 0.5 → 13 of 26
+  assert.equal(proxyItem(half).pts, 13);
 
   const many = clean();
   many.sources.shodan = shodan;
   for (const id of ['ipinfo', 'ipapi', 'ipapiis', 'iplocate', 'ip2location']) many.sources[id] = ok({ ...geo(), flags: f({ vpn: false, proxy: false, hosting: false }) });
-  // N = 1.0 + 0.8 + 1.3 + 0.8 + 0.9 + 0.9 + 0.6 = 6.3 → E = 1 / 7.3 ≈ 0.14 → ≈ 2.7 of 20
+  // N = 1.0 + 0.8 + 1.3 + 0.8 + 0.9 + 0.9 + 0.6 = 6.3 → E = 1 / 7.3 ≈ 0.14 → ≈ 3.6 of 26
   const result = score(many);
   assert.equal(result.checks.anon.proxy.yes, 1);
   assert.equal(result.checks.anon.proxy.of, 8);
-  assert.equal(proxyItem(many).pts, 2.7);
+  assert.equal(proxyItem(many).pts, 3.6);
   assert.match(proxyItem(many).detail, /^1\/8 来源命中：shodan · 加权占比 14%$/);
 });
 
@@ -170,9 +170,9 @@ test('VPN and proxy flags for the same egress are not counted twice', () => {
   const evidence = clean();
   for (const id of ['proxycheck', 'ipquery']) evidence.sources[id].data.flags = f({ vpn: true, proxy: true, tor: false, hosting: false });
   const anon = score(evidence).categories.find(c => c.id === 'anon');
-  assert.equal(anon.items.find(i => i.id === 'proxy').pts, 20);
-  assert.equal(anon.items.find(i => i.id === 'vpn').pts, 9);
-  assert.equal(anon.raw, 29);
+  assert.equal(anon.items.find(i => i.id === 'proxy').pts, 26);
+  assert.equal(anon.items.find(i => i.id === 'vpn').pts, 12);
+  assert.equal(anon.raw, 38);
 });
 
 test('a lone high fraud score weighs less when many vendors disagree', () => {

@@ -10,7 +10,7 @@
  */
 
 const CATEGORIES = Object.freeze([
-  { id: 'anon', label: '匿名化', cap: 45 },
+  { id: 'anon', label: '匿名化', cap: 50 },
   { id: 'abuse', label: '滥用与黑名单', cap: 40 },
   { id: 'neighbours', label: '邻居与 ASN 信誉', cap: 25 },
   { id: 'network', label: '网络类型与 ASN 画像', cap: 20 },
@@ -226,7 +226,7 @@ export function score(evidence) {
   if (tor.E > 0) add('anon', 'tor', 'Tor', 40 * tor.E, voteText(tor));
   // VPN and proxy flags usually describe the same anonymised egress, often from the same database:
   // the stronger one counts in full, the other at half.
-  const vpnPts = 18 * anonFlags.vpn.E; const proxyPts = 20 * anonFlags.proxy.E;
+  const vpnPts = 24 * anonFlags.vpn.E; const proxyPts = 26 * anonFlags.proxy.E;
   const overlap = vpnPts > 0 && proxyPts > 0;
   const halfNote = other => (overlap ? `；与${other}证据重叠，按一半计` : '');
   if (vpnPts) add('anon', 'vpn', 'VPN', overlap && vpnPts < proxyPts ? vpnPts / 2 : vpnPts, voteText(anonFlags.vpn) + (vpnPts < proxyPts ? halfNote('代理') : ''));
