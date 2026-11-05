@@ -1,7 +1,8 @@
 /**
  * Egress IP quality score. Pure function: evidence in, explained score out.
  *
- * Score = 100 − Σ min(category cap, Σ item points), Tor exits capped at 25.
+ * Score = 92 + bonuses (≤ 8) − Σ min(category cap, Σ item points), Tor exits capped at 25.
+ * Voted items deduct by the weighted share of sources that flag them, so a lone hit among many misses costs little.
  * Safety comes first: anonymity, abuse, and the reputation of the /24 neighbours and the ASN carry most
  * of the weight; network type, ASN-type consistency and native/broadcast are small descriptive hints.
  * Live connection checks apply only when the target is the visitor's own egress.
@@ -77,32 +78,41 @@ const COUNTRY_LANGS = {
 };
 
 const r1 = value => Math.round(value * 10) / 10;
+const r3 = value => Math.round(value * 1000) / 1000;
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
 // ---------- evidence helpers ----------
 
 /**
- * Two evidence classes.
- * - Classified: a database labels the IP. Weighted vote E_db = P / (P + 0.5 N); a detection counts more than a miss.
- * - Observed: someone saw the behaviour directly (open proxy port, public proxy / Tor list, drone list).
- *   Observations combine as noisy-OR, E_obs = 1 − Π(1 − w), and are not diluted by databases that never classified the IP.
- * E = 1 − (1 − E_obs)(1 − E_db); a hard confirmation (Tor consensus, WARP) is E = 1.
+ * Weighted share of the sources that answered: E = H / (H + N), so one hit among seven misses costs about a seventh
+ * of the item, one hit against one miss about half.
+ * - H, hit strength: a database classification adds its weight w; a direct observation (open proxy port,
+ *   public proxy / Tor list, drone list) adds its odds w / (1 − w), so a reliable sighting (0.85 → 5.7) is hard
+ *   to outvote while a weak one (Shodan tag 0.5 → 1) counts like a single database.
+ * - N, miss strength: Σ w of the sources that explicitly said no. Missing fields never count.
+ * A hard confirmation (Tor consensus, WARP) is E = 1.
  */
 function tally(votes) {
   const known = votes.filter(vote => typeof vote.value === 'boolean');
   const positive = known.filter(vote => vote.value);
   const hard = positive.some(vote => vote.hard);
-  const classified = positive.filter(vote => !vote.obs);
   const observed = positive.filter(vote => vote.obs);
-  const P = classified.reduce((sum, vote) => sum + vote.w, 0);
+  const H = positive.reduce((sum, vote) => {
+    const w = Math.min(0.95, vote.w);
+    return sum + (vote.obs ? w / (1 - w) : vote.w);
+  }, 0);
   const N = known.filter(vote => !vote.value).reduce((sum, vote) => sum + vote.w, 0);
-  const Edb = P === 0 ? 0 : P / (P + 0.5 * N);
-  const Eobs = 1 - observed.reduce((acc, vote) => acc * (1 - Math.min(0.95, vote.w)), 1);
-  const E = hard ? 1 : 1 - (1 - Eobs) * (1 - Edb);
+  const E = hard ? 1 : H > 0 ? H / (H + N) : 0;
   return {
-    E: r1(E * 100) / 100, Edb: r1(Edb * 100) / 100, Eobs: r1(Eobs * 100) / 100, yes: positive.length, of: known.length, hard,
+    E: r3(E), H: r3(H), N: r3(N), yes: positive.length, of: known.length, hard,
     by: positive.map(vote => vote.by), observedBy: observed.map(vote => vote.by), clear: known.filter(vote => !vote.value).map(vote => vote.by),
   };
+}
+
+/** "2/7 来源命中：A、B · 加权占比 31%" — the detail line behind every voted deduction. */
+function voteText(t, verb = '来源命中') {
+  const share = t.hard ? '直接确认' : `加权占比 ${Math.round(t.E * 100)}%`;
+  return `${t.yes}/${t.of} ${verb}${t.by.length ? `：${t.by.join('、')}` : ''} · ${share}`;
 }
 
 function okSources(evidence) {
@@ -200,7 +210,8 @@ export function score(evidence) {
   }
   if (regCountry && country) {
     native = regCountry === country;
-    if (!native) add('geo', 'broadcast', '广播 IP', 3, `注册地 ${regCountry}，定位 ${country}`);
+    // Scaled by how much of the registration evidence disagrees with the location.
+    if (!native) add('geo', 'broadcast', '广播 IP', 3 * (1 - nativeShare), `注册地 ${regCountry}，定位 ${country}${nativeShare > 0 ? `；${Math.round(nativeShare * 100)}% 的注册信息与定位一致` : ''}`);
     if (regRank.length > 1) note('info', `注册信息不一致：${regRank.map(item => `${item.value}（${item.by.join('、')}）`).join(' / ')}`);
   }
 
@@ -211,12 +222,19 @@ export function score(evidence) {
     anonFlags[flag] = tally([...flagVotes(sources, flag), ...(extraVotes[flag] || [])]);
   }
   const tor = anonFlags.tor;
-  if (tor.E > 0) add('anon', 'tor', 'Tor', 40 * tor.E, `${tor.yes}/${tor.of} 来源命中：${tor.by.join('、')}`);
-  if (anonFlags.vpn.E > 0) add('anon', 'vpn', 'VPN', 18 * anonFlags.vpn.E, `${anonFlags.vpn.yes}/${anonFlags.vpn.of}：${anonFlags.vpn.by.join('、')}`);
+  const torHard = tor.hard || tor.E >= 0.7;
+  if (tor.E > 0) add('anon', 'tor', 'Tor', 40 * tor.E, voteText(tor));
+  // VPN and proxy flags usually describe the same anonymised egress, often from the same database:
+  // the stronger one counts in full, the other at half.
+  const vpnPts = 18 * anonFlags.vpn.E; const proxyPts = 20 * anonFlags.proxy.E;
+  const overlap = vpnPts > 0 && proxyPts > 0;
+  const halfNote = other => (overlap ? `；与${other}证据重叠，按一半计` : '');
+  if (vpnPts) add('anon', 'vpn', 'VPN', overlap && vpnPts < proxyPts ? vpnPts / 2 : vpnPts, voteText(anonFlags.vpn) + (vpnPts < proxyPts ? halfNote('代理') : ''));
   const resProxyBy = sources.filter(source => source.resProxy === true).map(source => source.name);
-  if (anonFlags.proxy.E > 0) add('anon', 'proxy', resProxyBy.length ? '代理（含住宅代理）' : '代理', 20 * anonFlags.proxy.E, `${anonFlags.proxy.yes}/${anonFlags.proxy.of}：${anonFlags.proxy.by.join('、')}`);
-  if (anonFlags.relay.E > 0) add('anon', 'relay', '隐私中继', 5 * anonFlags.relay.E, anonFlags.relay.by.join('、'));
-  if (anonFlags.crawler.E > 0) add('anon', 'crawler', '爬虫 / 自动化', 8 * anonFlags.crawler.E, anonFlags.crawler.by.join('、'));
+  if (proxyPts) add('anon', 'proxy', resProxyBy.length ? '代理（含住宅代理）' : '代理', overlap && proxyPts <= vpnPts ? proxyPts / 2 : proxyPts, voteText(anonFlags.proxy) + (proxyPts <= vpnPts ? halfNote(' VPN ') : ''));
+  if (anonFlags.relay.E > 0) add('anon', 'relay', '隐私中继', 5 * anonFlags.relay.E, voteText(anonFlags.relay));
+  if (anonFlags.crawler.E > 0) add('anon', 'crawler', '爬虫 / 自动化', 8 * anonFlags.crawler.E, voteText(anonFlags.crawler));
+  const anonAny = Math.max(anonFlags.vpn.E, anonFlags.proxy.E);
   const devices = sources.find(source => source.id === 'proxycheck')?.devices;
   if (devices?.address >= 10) {
     add('anon', 'shared', '多设备共用出口', devices.address >= 50 ? 5 : 3, `Proxycheck 估计该地址近期约 ${devices.address} 台设备`);
@@ -252,12 +270,17 @@ export function score(evidence) {
   // Mixture and certainty behind the type label, for gradient "家宽 / 机房 ?" tags.
   const TYPE_FROM_ASN = { isp: 'residential', mobile: 'mobile', hosting: 'hosting', cdn: 'hosting', transit: 'business', business: 'business', government: 'business', education: 'education' };
   let typeMix = []; let typeCertainty = 0;
+  // How sure we are that this is an operator access line (home broadband or mobile), for the clean-ISP bonus.
+  let homeCertainty = 0;
   if (typeFrom === 'sources' || typeFrom === 'exclusion') {
     const hostShare = hosting.of ? hosting.E : ipType === 'hosting' ? 1 : 0;
     const others = nonHostingRank.length ? nonHostingRank : [{ value: 'residential', share: 1 }];
     typeMix = [{ value: 'hosting', share: hostShare }, ...others.map(item => ({ value: item.value, share: (1 - hostShare) * item.share }))];
     const evidenceCount = hosting.of + typeVotes.length;
-    typeCertainty = typeFrom === 'exclusion' ? 0.35 : Math.max(...typeMix.map(item => item.share)) * Math.min(1, evidenceCount / 4);
+    const coverage = Math.min(1, evidenceCount / 4);
+    typeCertainty = typeFrom === 'exclusion' ? 0.35 : Math.max(...typeMix.map(item => item.share)) * coverage;
+    const homeShare = typeMix.filter(item => item.value === 'residential' || item.value === 'mobile').reduce((sum, item) => sum + item.share, 0);
+    homeCertainty = typeFrom === 'exclusion' ? 0.35 : homeShare * coverage;
   } else if (typeFrom === 'asn') {
     const merged = new Map();
     for (const item of asnInfo.inferred?.mix || []) {
@@ -266,12 +289,13 @@ export function score(evidence) {
     }
     typeMix = [...merged].map(([value, share]) => ({ value, share }));
     typeCertainty = (asnInfo.inferred?.confidence ?? 0) * 0.6;
+    if (ipType === 'residential' || ipType === 'mobile') homeCertainty = typeCertainty;
   }
   typeMix = typeMix.filter(item => item.share > 0.005).sort((a, b) => b.share - a.share).map(item => ({ ...item, share: r1(item.share * 100) / 100 }));
 
-  if (hosting.E > 0) add('network', 'hosting', '机房 IP', 15 * hosting.E, `${hosting.yes}/${hosting.of} 来源标记机房：${hosting.by.join('、')}`);
+  if (hosting.E > 0) add('network', 'hosting', '机房 IP', 15 * hosting.E, voteText(hosting, '来源标记机房'));
   else if (ipType === 'hosting' && typeFrom === 'asn') add('network', 'hosting-asn', '机房 IP（按 ASN 推断）', 10 * (asnHosting ?? 0.7), asnInfo.inferred?.reasons?.[0] || '');
-  if (ipType === 'business' && hosting.E < 0.5) add('network', 'business', '商业 / 企业网络', 2, nonHostingRank[0]?.by.join('、') || 'ASN 推断');
+  // A business line is not a risk in itself: proxies on it are caught by the anonymity, lease and abuse items.
 
   // The key cross-check: a "residential" label inside a datacenter or transit ASN.
   let asnConsistency = null;
@@ -334,12 +358,14 @@ export function score(evidence) {
   }
   const riskW = riskEntries.reduce((sum, entry) => sum + entry.w, 0);
   // One major vendor's high score matters even if others say 0: blend the weighted mean with the (weight-capped) maximum.
+  // The more vendors answer, the less a lone outlier counts: the maximum's share is 0.4 up to 3 vendors, 0.4·√(3/n) beyond.
   const riskMean = riskW ? riskEntries.reduce((sum, entry) => sum + entry.v * entry.w, 0) / riskW : null;
   const riskMax = riskEntries.length ? Math.max(...riskEntries.map(entry => entry.v * Math.min(1, entry.w))) : null;
-  const risk = riskW ? Math.round(0.6 * riskMean + 0.4 * riskMax) : null;
+  const maxShare = riskEntries.length ? 0.4 * Math.min(1, Math.sqrt(3 / riskEntries.length)) : 0;
+  const risk = riskW ? Math.round((1 - maxShare) * riskMean + maxShare * riskMax) : null;
   if (risk) add('abuse', 'risk', '欺诈 / 风险分', 0.3 * risk, riskEntries.map(entry => `${entry.by} ${entry.v}`).join(' · '));
   const abuser = tally([...flagVotes(sources, 'abuser'), ...(extraVotes.abuser || [])]);
-  if (abuser.E > 0) add('abuse', 'abuser', '滥用 / 入侵记录', 10 * abuser.E, abuser.by.join('、'));
+  if (abuser.E > 0) add('abuse', 'abuser', '滥用 / 入侵记录', 10 * abuser.E, voteText(abuser));
 
   const dnsbl = (evidence.dnsbl || []).filter(item => item.status === 'ok');
   const dnsblListed = dnsbl.filter(item => item.listed && item.kind !== 'tor');
@@ -446,8 +472,19 @@ export function score(evidence) {
   }
   if (nb && nb.checked >= 4 && !nb.count && !nb.whole.length && !nb.tor) plus('clean-neighbours', '邻居干净', 2, `${nb.prefix} 在 ${nb.checked} 个威胁列表里没有任何邻居上榜`);
   if (rep && rep.ratio < 0.5 && rep.size >= 4096) plus('asn-clean', 'ASN 信誉良好', 2, `滥用密度只有全网平均的 ${rep.ratio} 倍`);
-  if ((ipType === 'residential' || ipType === 'mobile') && typeCertainty >= 0.7 && (asnCls === 'isp' || asnCls === 'mobile') && (asnInfo.inferred?.confidence ?? 0) >= 0.6) {
-    plus('eyeball', ipType === 'mobile' ? '可信的移动网络' : '可信的运营商家宽', ipType === 'mobile' ? 2 : 1.5, '数据库与 ASN 都指向运营商接入网，网站很少整段封禁这类地址');
+  // A clean operator access line (home broadband / mobile) is what websites trust most. Up to +3, scaled by how sure
+  // the type is and whether the ASN agrees; any anonymity or abuse evidence forfeits it.
+  const safeRecord = !torHard && anonAny < 0.15 && abuser.E < 0.15 && (risk ?? 0) < 25 && !attack.length && !dnsblListed.some(item => item.kind === 'abuse');
+  if ((ipType === 'residential' || ipType === 'mobile') && safeRecord) {
+    const asnConf = asnInfo.inferred?.confidence ?? 0;
+    const asnFactor = (asnCls === 'isp' || asnCls === 'mobile') && asnConf >= 0.6 ? 1
+      : asnCls === 'isp' || asnCls === 'mobile' || !asnCls ? 0.5 : asnCls === 'business' || asnCls === 'education' || asnCls === 'government' ? 0.3 : 0;
+    const pts = r1(3 * clamp((homeCertainty - 0.5) / 0.4, 0, 1) * asnFactor);
+    const asnText = asnFactor === 1 ? 'ASN 也是运营商' : asnFactor === 0.5 ? 'ASN 类型未确认' : 'ASN 不是运营商';
+    if (pts >= 0.3) {
+      plus('eyeball', ipType === 'mobile' ? '纯净移动网络' : '纯净运营商 IP', pts,
+        `类型确定度 ${Math.round(homeCertainty * 100)}%，${asnText}，没有匿名或滥用记录；网站很少整段封禁这类地址`);
+    }
   }
   if (native && nativeCertainty >= 0.7) plus('native', '原生 IP', 0.5, '注册地与定位一致');
   if (asnInfo.rpki === 'valid') plus('rpki', 'RPKI 有效', 0.5, '路由宣告有 ROA 背书，不像被劫持的地址');
@@ -461,13 +498,11 @@ export function score(evidence) {
 
   let ipScore = Math.round(clamp(BASE + ipBonus - ipPenalty, 0, 100));
   let total = Math.round(clamp(BASE + ipBonus + liveBonus - ipPenalty - penaltyOf('live'), 0, 100));
-  const torHard = tor.hard || tor.E >= 0.7;
   if (torHard) { ipScore = Math.min(ipScore, 25); total = Math.min(total, 25); }
   const scoredSources = sources.length;
   const pending = Object.values(evidence.sources || {}).filter(source => source?.status === 'pending').length;
 
   // ---------- tiles ----------
-  const anonAny = Math.max(anonFlags.vpn.E, anonFlags.proxy.E);
   const checks = {
     type: { value: ipType, label: ipType ? TYPE_LABEL[ipType] || ipType : null, from: typeFrom, hosting, votes: nonHostingRank, mix: typeMix, certainty: r1(typeCertainty * 100) / 100, level: ipType === 'hosting' ? 'warn' : ipType === 'business' ? 'info' : ipType ? 'good' : 'none' },
     native: { native, regCountry, regVotes: regRank, nativeShare, certainty: r1(nativeCertainty * 100) / 100, level: native === null ? 'none' : native ? 'good' : 'warn' },
