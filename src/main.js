@@ -1,4 +1,4 @@
-import { readIPinfoPage, mergeIPinfoPage } from './ipinfo-page.js';
+import { readIPinfoPage, mergeIPinfoPage } from './ipinfo-page.js?v=2.6';
 import { setupImport, supplementTypes } from './ipsuper.js?v=2.4';
 /** Orchestration: detect the egress, fan out every check, rescore as results arrive. */
 import { API_BASE } from '../config.js';
@@ -9,7 +9,7 @@ import { fetchASN, inferASN, detectLease } from './asn.js';
 import { detectEgress, summarizeEgress, probeWebRTC, probeDNS, classifyDNS, probeTCP, probeEnvironment, probeIPv6, classifyIPv6, traceProbe } from './probes.js';
 import { runTurnstile, runRecaptcha } from './captcha.js';
 import { score } from './score.js';
-import * as view from './render.js?v=2.4';
+import * as view from './render.js?v=2.6';
 
 const $ = id => document.getElementById(id);
 const app = {

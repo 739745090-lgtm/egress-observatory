@@ -16,6 +16,19 @@ export function readIPinfoPage(raw, target) {
   const companyName = field('Company');
   const asnType = field('AS Type')?.toLowerCase();
   const data = {flags,companyName,asnType,city:field('City'),tz:field('Timezone')};
+  const as = body.match(/^ASN\s+AS(\d+)\s+[—–-]\s*([^\n]+)/mi);
+  if (as) { data.asn = Number(as[1]); data.org = as[2].trim(); }
+  data.country = field('Location')?.match(/\b([A-Z]{2})$/)?.[1];
+  data.region = field('State');
+  data.postal = field('Postal');
+  data.range = field('Range');
+  const host = field('Hostname');
+  if (host && host !== '—' && host !== '-') data.hostname = host;
+  const coordinates = field('Coordinates')?.match(/([\d.]+)\s*([NS]),\s*([\d.]+)\s*([EW])/i);
+  if (coordinates) {
+    data.lat = Number(coordinates[1]) * (coordinates[2] === 'S' ? -1 : 1);
+    data.lon = Number(coordinates[3]) * (coordinates[4] === 'W' ? -1 : 1);
+  }
   if (flags.resProxy !== undefined) { data.resProxy = flags.resProxy; delete flags.resProxy; }
   if (flags.hosting === true) data.usageType = data.type = 'hosting';
   if (!Object.keys(flags).length && !companyName && !asnType) throw Error('未识别到 IPinfo 摘要字段。');
