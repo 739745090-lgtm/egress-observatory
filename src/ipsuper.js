@@ -87,3 +87,19 @@ export function readRiskReport(report, ip) {
   }
   return result;
 }
+
+export function mergeTypeReports(previous,next) {
+  return (ip,id)=>{
+    const old=previous(ip,id),fresh=next(ip,id);
+    return old || fresh ? {...old,...fresh} : null;
+  };
+}
+
+export function mergeRiskReports(previous,next) {
+  const result={...previous};
+  for(const [id,row] of Object.entries(next)) {
+    const old=result[id];
+    result[id]={...old,...row,data:{...old?.data,...row.data,flags:{...old?.data?.flags,...row.data.flags}}};
+  }
+  return result;
+}

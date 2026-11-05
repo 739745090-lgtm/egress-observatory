@@ -1,6 +1,6 @@
 import { lookupIPOK, lookupDBIPWeb, fillSource } from './supplements.js?v=3';
 import { readIPinfoPage, mergeIPinfoPage } from './ipinfo-page.js?v=3.4';
-import { setupImport, supplementTypes, readReport, readRiskReport } from './ipsuper.js?v=3.3';
+import { setupImport, supplementTypes, readReport, readRiskReport, mergeTypeReports, mergeRiskReports } from './ipsuper.js?v=3.4';
 import { setupProviderImport, readProviderReport, mergeProviderPage, lookupChromePages, PAGE_SOURCES } from './provider-pages.js?v=2';
 /** Orchestration: detect the egress, fan out every check, rescore as results arrive. */
 import { API_BASE, PAGE_LOOKUP_CLOUD } from '../config.js?v=cloud2';
@@ -275,8 +275,8 @@ async function startRun(input, fetchPages = true) {
       const pages=readProviderReport(report,parsed.ip);
       for(const [id,page] of Object.entries(pages)) if(page.status==='ok' || !run.providerPages[id])run.providerPages[id]=page;
       if(report.ipsuper && report.ipsuper.time>=ipsuperObservedAt) {
-        ipsuperPages=readRiskReport(report.ipsuper,parsed.ip);ipsuperRisk=report.ipsuper.riskPercent || {};
-        webTypes=readReport(report.ipsuper,parsed.ip);ipsuperObservedAt=report.ipsuper.time;
+        ipsuperPages=mergeRiskReports(ipsuperPages,readRiskReport(report.ipsuper,parsed.ip));ipsuperRisk={...ipsuperRisk,...report.ipsuper.riskPercent};
+        webTypes=mergeTypeReports(webTypes,readReport(report.ipsuper,parsed.ip));ipsuperObservedAt=report.ipsuper.time;
         run.ipsuperReturned=SOURCES.filter(source=>webTypes(parsed.ip,source.id)).map(source=>source.id);
         statuses.ipsuper='IPSuper 第三方页面已自动读取，类型与风险字段已补充';
       }
@@ -309,9 +309,9 @@ async function startRun(input, fetchPages = true) {
               typeof d.flags.hosting === 'boolean' && (d.flags.hosting ? '机房检出' : '机房未检出')].filter(Boolean).join(' · ');
           } else {
             if(report.time>=ipsuperObservedAt) {
-              webTypes = readReport(report, parsed.ip);
-              ipsuperRisk = report.riskPercent || {};
-              ipsuperPages = readRiskReport(report,parsed.ip);
+              webTypes = mergeTypeReports(webTypes,readReport(report, parsed.ip));
+              ipsuperRisk = {...ipsuperRisk,...report.riskPercent};
+              ipsuperPages = mergeRiskReports(ipsuperPages,readRiskReport(report,parsed.ip));
               ipsuperObservedAt=report.time;
             }
             run.ipsuperReturned = SOURCES.filter(source => webTypes(parsed.ip, source.id)).map(source => source.id);
