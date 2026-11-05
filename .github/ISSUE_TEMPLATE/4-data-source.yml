@@ -1,0 +1,49 @@
+name: 数据源
+description: 提议新增数据源，或反馈现有来源的字段、权重、可用性问题
+labels: [data-source]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        本站只把实际返回、且与目标 IP 一致的字段纳入结果；没有返回的字段保持未知，不当作“否”。详见 [DATA-SOURCES.md](https://github.com/BlackSlience-Reaper/egress-observatory/blob/main/DATA-SOURCES.md)。
+  - type: dropdown
+    id: kind
+    attributes:
+      label: 类型
+      options:
+        - 新增数据源
+        - 现有来源字段解析有误
+        - 现有来源失效或限流
+        - 权重或去重调整
+    validations:
+      required: true
+  - type: input
+    id: name
+    attributes:
+      label: 来源名称
+    validations:
+      required: true
+  - type: input
+    id: docs
+    attributes:
+      label: 官方文档或接口地址
+      description: 请给官方链接。
+    validations:
+      required: true
+  - type: textarea
+    id: fields
+    attributes:
+      label: 能提供或有问题的字段
+      description: 例如 VPN、代理、Tor、机房、使用类型、风险分。写明字段名和含义；如果是有误，写明期望值和实际值。
+    validations:
+      required: true
+  - type: textarea
+    id: access
+    attributes:
+      label: 访问方式
+      description: 是否需要 key、免费额度、是否支持 CORS，以及需要走浏览器、后端还是网页读取。
+  - type: textarea
+    id: origin
+    attributes:
+      label: 底层数据库
+      description: 如果它转售或引用其他数据库，请写明。同一底层库会合并计票，不能重复计权。

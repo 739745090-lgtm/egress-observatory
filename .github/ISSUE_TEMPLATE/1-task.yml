@@ -1,0 +1,52 @@
+name: 开发任务
+description: 记录一项要做的工作，之后通过 PR 完成
+labels: [task]
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: 目标
+      description: 要解决什么问题，做完之后有什么不同。
+    validations:
+      required: true
+  - type: textarea
+    id: done
+    attributes:
+      label: 完成标准
+      description: 怎样算做完，最好能逐条验证。
+      value: |
+        - [ ]
+        - [ ]
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: 涉及范围
+      multiple: true
+      options:
+        - 页面与样式
+        - 评分引擎
+        - 数据源
+        - 后端 Worker
+        - 网页查询服务
+        - Chrome 扩展
+        - 仓库、CI 与文档
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: 需要在哪个平台验证
+      multiple: true
+      options:
+        - 不限
+        - Windows
+        - macOS
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: 备注
+      description: 相关链接、思路、进度。换电脑继续时可以把进度记在评论里。

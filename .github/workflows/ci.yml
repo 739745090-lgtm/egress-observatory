@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Unit tests
+        run: npm test
+      - name: Python syntax
+        run: python -m compileall -q local_server.py cloud_server.py provider_pages.py
+      - name: Extension files match the site
+        shell: bash
+        run: |
+          for file in page-extract.js page-providers.js util.js; do
+            cmp "src/$file" "browser-helper/$file"
+          done

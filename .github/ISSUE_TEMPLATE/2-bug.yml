@@ -1,0 +1,49 @@
+name: 问题反馈
+description: 页面报错、结果明显不对、扩展或查询服务失效
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **请不要公开真实出口 IP。** Issue 所有人都能看到。截图和导出报告前先点页面上的“隐藏 IP”；需要举例时使用文档保留地址，例如 `203.0.113.10` 或 `2001:db8::1`。
+  - type: textarea
+    id: what
+    attributes:
+      label: 发生了什么
+      description: 看到的现象，以及你期望的结果。
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 打开页面
+        2. 输入……
+        3. 看到……
+    validations:
+      required: true
+  - type: dropdown
+    id: entry
+    attributes:
+      label: 在哪里出现
+      options:
+        - 线上网站（GitHub Pages）
+        - 本地运行（local_server.py 或 启动网站.cmd）
+        - Chrome 扩展
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: 环境
+      description: 操作系统、浏览器和版本；用到扩展时写上扩展版本。
+      placeholder: Windows 11, Chrome 140, 扩展 v1.3.1
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 相关信息
+      description: 页面“查询详情”的报错、浏览器控制台输出或打码后的截图。贴之前再检查一遍有没有真实 IP。
+      render: text
