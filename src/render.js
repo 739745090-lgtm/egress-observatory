@@ -379,7 +379,16 @@ export function renderTypes(run) {
     for (const id of ids) { const value = run.sources[id]?.status === 'ok' ? run.sources[id].data[field] : null; if (value) counts[value] = (counts[value] || 0) + 1; }
     return Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([value, count]) => `${UT_LABEL[value] || value} ${count}`).join(' · ') || '暂无';
   };
-  $('types').innerHTML = `<table class="type-table"><thead><tr><th></th>${ids.map(id => `<th>${esc(SOURCES.find(source => source.id === id)?.name || id)}</th>`).join('')}</tr></thead>
+  const filled = [];
+  for (const id of ids) {
+    const data = run.sources[id]?.data;
+    for (const field of data?.importedFields || []) {
+      const name = SOURCES.find(source => source.id === id)?.name || id;
+      filled.push(`${name} ${field === 'usageType' ? '使用类型' : '公司类型'}：${UT_LABEL[data[field]] || data[field]}`);
+    }
+  }
+  const supplement = run.ipsuperReturned ? `<div class="type-summary" aria-label="IPSuper 补全结果"><strong>IPSuper 补全了 ${filled.length} 格</strong><p>${filled.length ? filled.map(esc).join(' · ') : '本轮已返回的类型与现有字段没有可补的空格。'}</p></div>` : '';
+  $('types').innerHTML = `${supplement}<table class="type-table"><thead><tr><th></th>${ids.map(id => `<th>${esc(SOURCES.find(source => source.id === id)?.name || id)}</th>`).join('')}</tr></thead>
     <tbody>
       <tr><th scope="row">使用类型</th>${ids.map(id => `<td>${typeCell(run.sources[id], 'usageType', id)}</td>`).join('')}</tr>
       <tr><th scope="row">公司类型</th>${ids.map(id => `<td>${typeCell(run.sources[id], 'companyType', id)}</td>`).join('')}</tr>

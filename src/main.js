@@ -9,7 +9,7 @@ import { fetchASN, inferASN, detectLease } from './asn.js';
 import { detectEgress, summarizeEgress, probeWebRTC, probeDNS, classifyDNS, probeTCP, probeEnvironment, probeIPv6, classifyIPv6, traceProbe } from './probes.js';
 import { runTurnstile, runRecaptcha } from './captcha.js';
 import { score } from './score.js';
-import * as view from './render.js?v=3.2';
+import * as view from './render.js?v=3.5';
 
 const $ = id => document.getElementById(id);
 const app = {
@@ -150,7 +150,7 @@ function scheduleRender() {
 
 // ---------- a single check ----------
 
-async function startRun(input, fetchPages = false) {
+async function startRun(input, fetchPages = true) {
   const parsed = parseIP(input);
   if (!parsed || !isPublicIP(parsed.ip)) { $('status').textContent = '请输入有效的公网 IPv4 或 IPv6 地址。'; return; }
   app.run?.controller.abort();
@@ -228,6 +228,7 @@ async function startRun(input, fetchPages = false) {
               typeof d.flags.hosting === 'boolean' && (d.flags.hosting ? '机房检出' : '机房未检出')].filter(Boolean).join(' · ');
           } else {
             webTypes = readReport(report, parsed.ip);
+            run.ipsuperReturned = SOURCES.filter(source => webTypes(parsed.ip, source.id)).map(source => source.id);
             statuses.ipsuper = 'IPSuper 网页已读取';
           }
           refreshTypes(); scheduleRender();
