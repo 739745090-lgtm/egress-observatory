@@ -300,7 +300,7 @@ async function startRun(input, fetchPages = true) {
     lookupChromePages(parsed.ip, pageSignal, {
       onStart: focus => { if (!alive()) return; focusChrome = focus; statuses.chrome = 'Chrome 正在自动读取来源网页'; pageStatus.textContent = Object.values(statuses).join(' ｜ '); },
       onPartial: applyChrome,
-    }).then(report => { applyChrome(report); if (alive()) { focusChrome = null; showChrome(); } })
+    }).then(report => { if (!report || !alive()) return; applyChrome(report); focusChrome = null; showChrome(); })
       .catch(error=>{if(alive() && !signal.aborted){focusChrome=null;challengeBox.innerHTML='';statuses.chrome=error.message;pageStatus.textContent=Object.values(statuses).join(' ｜ ');}});
     for (const provider of ['ipinfo','ipsuper','sources']) {
       const name = provider === 'sources' ? '来源网页' : provider === 'ipinfo' ? 'IPinfo' : 'IPSuper';

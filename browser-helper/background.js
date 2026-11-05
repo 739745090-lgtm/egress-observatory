@@ -2,7 +2,8 @@ import { parseIP, isPublicIP } from './util.js';
 import { extractProviderPage, extractIPSuperReport } from './page-extract.js';
 
 // One fixed result page per source. ipapi.is is left out: its page spends the same 30-per-IP daily quota
-// that Egress already uses directly, and requests past it get the address blocked for a day.
+// that Egress already uses directly, and requests past it get the address blocked for a day. IPData is left out:
+// its page shows the full record only after a Turnstile check, in a layout no extractor reads yet.
 const SITES = {
   ipsuper: ip => 'https://ipsuper.com/?ip=' + encodeURIComponent(ip),
   iphub: ip => 'https://iphub.info/?ip=' + encodeURIComponent(ip),
@@ -11,7 +12,6 @@ const SITES = {
   ip2location: ip => 'https://www.ip2location.io/' + encodeURIComponent(ip),
   greynoise: ip => 'https://viz.greynoise.io/ip/' + encodeURIComponent(ip),
   dbip: ip => 'https://db-ip.com/' + encodeURIComponent(ip),
-  ipdata: ip => 'https://ipdata.co/' + encodeURIComponent(ip),
   ipregistry: ip => 'https://ipregistry.co/' + encodeURIComponent(ip),
   blackbox: ip => 'https://blackbox.ipinfo.app/api/v3beta/' + encodeURIComponent(ip),
   ipquery: ip => 'https://api.ipquery.io/' + encodeURIComponent(ip) + '?format=json',

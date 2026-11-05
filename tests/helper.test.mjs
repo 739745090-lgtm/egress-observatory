@@ -65,7 +65,7 @@ test('the helper reads every source page, three at a time, and reports each one 
   assert.ok(peak >= 3 && peak <= 4, `3 loading pages, plus at most the challenged one; saw ${peak}`);
   assert.equal(done.ip, IP);
   assert.equal(done.version, '9.9.9');
-  assert.deepEqual(Object.keys(done.sources).sort(), ['blackbox', 'dbip', 'greynoise', 'ip2location', 'ipdata', 'iphub', 'ipqs', 'ipquery', 'ipregistry', 'scamalytics']);
+  assert.deepEqual(Object.keys(done.sources).sort(), ['blackbox', 'dbip', 'greynoise', 'ip2location', 'iphub', 'ipqs', 'ipquery', 'ipregistry', 'scamalytics']);
   assert.ok(!('ipapiis' in done.sources), 'ipapi.is is not opened: its page spends the per-IP daily quota');
   assert.equal(done.sources.ipregistry.status, 'ok', 'a page behind a human check is read once the visitor completes it');
   assert.equal(done.sources.ipregistry.data.country, 'JP');
