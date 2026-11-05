@@ -173,6 +173,10 @@ npm test
   </picture>
 </a>
 
+## 联系与合作
+
+广告投放、数据合作或其他合作，请在 X 上联系 [@BlackSlience](https://x.com/BlackSlience)。问题反馈和功能建议请走 [Issues](https://github.com/BlackSlience-Reaper/egress-observatory/issues)。
+
 ## 赞助
 
 如果 Egress 帮到了你，可以在爱发电支持项目的开发：
