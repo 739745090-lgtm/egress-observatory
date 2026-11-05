@@ -39,26 +39,41 @@ const IP_TYPE_LABEL = { residential: '家宽', mobile: '移动网络', business:
 const ASN_LABEL = { isp: 'ISP', mobile: '移动运营商', hosting: '机房 / 云', cdn: 'CDN', transit: '骨干网', business: '企业网', education: '教育网', government: '政府网' };
 const UNSURE = 0.6;
 
-/** parts: [{ value, share }] sorted desc. Shows up to two parts; the gradient sits at their split. */
-function mixTag({ parts, labels, certainty = 1, tip = '', size = '' }) {
+/**
+ * parts: [{ value, share }] sorted desc. Shows up to two parts; the gradient sits at their split.
+ * tone overrides a value's colour; conflict ('bad' | 'warn') marks a label that the detection contradicts (red + "!").
+ */
+function mixTag({ parts, labels, certainty = 1, tip = '', size = '', tone = {}, conflict = null }) {
   const shown = (parts || []).filter((part, index) => index === 0 || part.share >= 0.2).slice(0, 2);
   if (!shown.length) return '<span class="muted">—</span>';
   const mixed = shown.length === 2;
   const name = value => (typeof labels === 'function' ? labels(value, mixed) : labels[value]) || value;
-  const c1 = `var(--t-${TONES[shown[0].value] || 'muted'})`;
-  const c2 = mixed ? `var(--t-${TONES[shown[1].value] || 'muted'})` : c1;
+  const color = value => `var(--t-${tone[value] || TONES[value] || 'muted'})`;
+  const c1 = color(shown[0].value);
+  const c2 = mixed ? color(shown[1].value) : c1;
   const split = mixed ? Math.round(shown[0].share / (shown[0].share + shown[1].share) * 100) : 100;
   const unsure = certainty < UNSURE;
-  return `<span class="tag2 ${size}${mixed ? ' mixed' : ''}${unsure ? ' unsure' : ''}" tabindex="0" data-tip="${esc(tip)}" style="--c1:${c1};--c2:${c2};--split:${split}%">`
-    + `<span class="tag2-text">${esc(shown.map(part => name(part.value)).join(' / '))}</span>${unsure ? '<i class="q" aria-label="不确定">?</i>' : ''}</span>`;
+  return `<span class="tag2 ${size}${mixed ? ' mixed' : ''}${unsure ? ' unsure' : ''}${conflict ? ` conflict conflict-${conflict}` : ''}" tabindex="0" data-tip="${esc(tip)}" style="--c1:${c1};--c2:${c2};--split:${split}%">`
+    + `<span class="tag2-text">${esc(shown.map(part => name(part.value)).join(' / '))}</span>${unsure ? '<i class="q" aria-label="不确定">?</i>' : ''}${conflict ? '<i class="x" aria-label="与检测结果矛盾">!</i>' : ''}</span>`;
 }
 
 const certaintyLine = value => `确定度 ${pct(value)}${value < UNSURE ? '：证据不足或互相矛盾，所以标了 ?' : ''}`;
+const HOME = new Set(['residential', 'mobile']);
+const DATACENTER = new Set(['hosting', 'cdn']);
+
+/** A home / mobile label that the ASN contradicts: red when the ASN is a datacenter, amber when it is a backbone. */
+function typeClash(result) {
+  const consistency = result.checks.asn.consistency;
+  if (!consistency || !HOME.has(result.checks.type.value)) return null;
+  return !consistency.ok ? { level: 'bad', text: consistency.text } : consistency.warn ? { level: 'warn', text: consistency.text } : null;
+}
 
 function typeTag(result) {
   const t = result.checks.type;
   if (!t.value) return '<span class="muted">—</span>';
+  const clash = typeClash(result);
   const lines = ['IP 网络类型（这个地址本身）', t.mix.map(part => `${IP_TYPE_LABEL[part.value] || part.value} ${pct(part.share)}`).join(' · ')];
+  if (clash) lines.push(`矛盾：${clash.text}`);
   if (t.from === 'sources') {
     for (const vote of t.votes) lines.push(`${vote.by.join('、')} 标为${IP_TYPE_LABEL[vote.value] || vote.value}`);
     if (t.hosting.yes) lines.push(`标记机房：${t.hosting.by.join('、')}`);
@@ -67,15 +82,57 @@ function typeTag(result) {
   if (t.from === 'asn') lines.push('没有来源给出这个 IP 的类型，按所属 ASN 的类型推断');
   if (t.hosting.clear.length) lines.push(`未标记机房：${t.hosting.clear.join('、')}`);
   lines.push(certaintyLine(t.certainty));
-  return mixTag({ parts: t.mix, labels: IP_TYPE_LABEL, certainty: t.certainty, tip: lines.join('\n') });
+  const tone = clash ? { residential: clash.level, mobile: clash.level } : {};
+  return mixTag({ parts: t.mix, labels: IP_TYPE_LABEL, certainty: t.certainty, tip: lines.join('\n'), tone, conflict: clash?.level });
+}
+
+/** The ASN's own claim (PeeringDB, its name) that independent evidence contradicts, if any. */
+function asnClash(run) {
+  const inferred = run.asnProfile?.inferred;
+  return inferred?.conflict && inferred.declared ? { cls: inferred.declared.cls, ...inferred.conflict } : null;
 }
 
 function asnTag(run, size = '') {
   const inferred = run.asnProfile?.inferred;
   if (!inferred?.cls) return run.asnProfile ? '<span class="muted">未知</span>' : '<span class="muted">—</span>';
+  const clash = asnClash(run);
   const lines = [`运营商类型（按 AS${run.asnProfile.asn} 推断）`, inferred.mix.slice(0, 4).map(part => `${ASN_LABEL[part.value]} ${pct(part.share)}`).join(' · '),
+    ...(clash ? [`矛盾：${clash.text}`] : []),
     `推断置信 ${pct(inferred.confidence)}${inferred.confidence < UNSURE ? '：依据少或互相矛盾，所以标了 ?' : ''}`, '依据：', ...inferred.reasons.map(reason => `· ${reason}`)];
-  return mixTag({ parts: inferred.mix, labels: ASN_LABEL, certainty: inferred.confidence, tip: lines.join('\n'), size });
+  // The contradicted (self-declared) class turns red; the whole tag is hatched only when that class is the verdict itself.
+  return mixTag({ parts: inferred.mix, labels: ASN_LABEL, certainty: inferred.confidence, tip: lines.join('\n'), size,
+    tone: clash ? { [clash.cls]: clash.level } : {}, conflict: clash && inferred.mix[0]?.value === clash.cls ? clash.level : null });
+}
+
+/** "自报 ISP": what the ASN says about itself. Neutral when independent data agrees, red / amber when it does not. */
+function declaredTag(run) {
+  const inferred = run.asnProfile?.inferred;
+  const declared = inferred?.declared;
+  if (!declared) return '';
+  const clash = asnClash(run);
+  const observed = inferred.observed;
+  const lines = ['ASN 自报类型：PeeringDB 与网络名称，由运营方自己填写', ...declared.by.map(reason => `· ${reason}`),
+    clash ? `矛盾：${clash.text}` : observed ? `独立证据：${observed.label}（${pct(observed.share)}）${observed.cls === declared.cls ? '，与自报一致' : ''}` : '没有足够的独立证据可以对照'];
+  return mixTag({ parts: [{ value: declared.cls, share: 1 }], labels: value => `自报 ${ASN_LABEL[value] || value}`, tip: lines.join('\n'),
+    tone: { [declared.cls]: clash?.level || 'muted' }, conflict: clash?.level });
+}
+
+/** Why a source's 家宽 / 移动 label is contradicted: the IP is judged a datacenter, or its ASN is one by independent evidence. */
+function homeClash(run, field) {
+  const t = run.result?.checks.type;
+  if (field === 'usageType' && t?.value === 'hosting' && t.certainty >= 0.5) return `综合判断为机房（确定度 ${pct(t.certainty)}）`;
+  const inferred = run.asnProfile?.inferred;
+  const observed = inferred?.observed;
+  if (observed && DATACENTER.has(observed.cls) && observed.hosting >= 0.5) return `AS${run.asnProfile.asn} 的独立证据指向${observed.label}`;
+  if (field === 'usageType' && run.result?.checks.asn.consistency?.ok === false) return run.result.checks.asn.consistency.text;
+  return null;
+}
+
+/** Type-matrix cell: a home label that the detection contradicts keeps its text and turns red. */
+function markClash(html, record, field, run) {
+  const value = record?.status === 'ok' ? record.data[field] : null;
+  const reason = value && HOME.has(value) ? homeClash(run, field) : null;
+  return reason ? html.replace('class="ut ', 'class="ut ut-conflict ').replace('data-tip="', `data-tip="${esc(`与检测矛盾：${reason}`)}&#10;`) : html;
 }
 
 function nativeTag(result) {
@@ -146,19 +203,40 @@ function itemPts(result, id) {
 
 // ---------- hero ----------
 
+function tweenNumber(node, to) {
+  const from = Number(node.dataset.v);
+  node.dataset.v = to;
+  cancelAnimationFrame(node.raf);
+  if (!Number.isFinite(from) || from === to || document.hidden || matchMedia('(prefers-reduced-motion: reduce)').matches) { node.textContent = to; return; }
+  const start = performance.now();
+  const frame = now => {
+    const k = Math.min(1, (now - start) / 700);
+    node.textContent = Math.round(from + (to - from) * (1 - (1 - k) ** 3));
+    if (k < 1) node.raf = requestAnimationFrame(frame);
+  };
+  node.raf = requestAnimationFrame(frame);
+}
+
+// Score ring: a full circle whose value arc is a gradient from a deep to a bright shade of the grade colour.
+// The arc, its round caps and the sweep are CSS (conic gradient + ring mask, driven by --p); updates only move --p.
+function renderRing(result, g) {
+  const box = $('score-ring');
+  box.classList.add('has-score');
+  box.dataset.tone = g.tone;
+  box.style.setProperty('--p', result.score);
+  tweenNumber(box.querySelector('.ring-text strong'), result.score);
+  const grade = box.querySelector('.ring-text span');
+  grade.className = `tone-${g.tone}`;
+  grade.textContent = `${g.letter} 级`;
+  box.setAttribute('aria-label', `综合分 ${result.score}，${g.letter} 级`);
+}
+
 export function renderHero(run, result, view) {
   knownIPs = [run.ip];
   const g = result.grade;
   const pending = result.confidence.pending;
-  const circumference = 2 * Math.PI * 52;
   const issues = result.categories.flatMap(category => category.items).sort((a, b) => b.pts - a.pts).slice(0, 5);
-  $('score-ring').innerHTML = `
-    <svg viewBox="0 0 120 120" class="ring tone-${g.tone}" aria-hidden="true">
-      <circle cx="60" cy="60" r="52" class="ring-track"/>
-      <circle cx="60" cy="60" r="52" class="ring-value" stroke-dasharray="${circumference}" stroke-dashoffset="${circumference * (1 - result.score / 100)}"/>
-    </svg>
-    <div class="ring-text"><strong>${result.score}</strong><span class="tone-${g.tone}">${g.letter} 级</span></div>`;
-  $('score-ring').setAttribute('aria-label', `综合分 ${result.score}，${g.letter} 级`);
+  renderRing(result, g);
   $('verdict').innerHTML = `
     <div class="verdict-head"><span class="verdict-label tone-${g.tone}">${esc(g.label)}</span>
       <span class="confidence c-${result.confidence.level}" tabindex="0" data-tip="评分可信程度&#10;成功来源 ${result.confidence.sources} 个；匿名类字段 ${result.confidence.anonSources} 个来源">置信度${{ high: '高', medium: '中', low: '低' }[result.confidence.level]}</span>
@@ -173,7 +251,7 @@ export function renderHero(run, result, view) {
     <div class="addr-row"><dt>位置</dt><dd>${place(s.country, s.city)}</dd></div>
     <div class="addr-row"><dt>所属网络</dt><dd>${asnLink(s.asn)} <span class="muted">${esc(s.org || '')}</span></dd></div>
     <div class="addr-row"><dt>类型</dt><dd>${typeTag(result)} ${nativeTag(result)} ${leaseTag(result)}</dd></div>
-    <div class="addr-row"><dt>运营商类型</dt><dd>${asnTag(run)}${run.asnProfile?.pdb?.type ? ` <span class="muted small">PeeringDB：${esc(run.asnProfile.pdb.type)}</span>` : ''}</dd></div>
+    <div class="addr-row"><dt>运营商类型</dt><dd>${asnTag(run)} ${declaredTag(run)}</dd></div>
     <div class="addr-row"><dt>主机名</dt><dd class="mono">${s.hostname ? ipText(s.hostname) : '–'}</dd></div>
     <div class="addr-row"><dt>时区</dt><dd>${esc(s.ipTimezone || '—')} <span class="muted">${s.ipOffset === null || s.ipOffset === undefined ? '' : formatOffset(s.ipOffset)}</span></dd></div>`;
 }
@@ -233,7 +311,7 @@ export function renderChecks(run, result) {
     { label: '欺诈分数', level: loading(c.risk.level), value: c.risk.value === null ? '—' : String(c.risk.value), sub: c.risk.entries.length ? `${c.risk.entries.length} 个来源加权` : '', pts: itemPts(result, 'risk') },
     { label: '滥用记录', level: loading(abuse.level), value: abuseText, sub: '', pts: itemPts(result, 'abuser') + itemPts(result, 'firehol') + itemPts(result, 'sfs') + itemPts(result, 'vulns') },
     { label: '黑名单', level: loading(c.dnsbl.level), value: c.dnsbl.listed.length ? `收录 ${c.dnsbl.listed.length}` : c.dnsbl.checked ? '未收录' : '—', sub: c.dnsbl.checked ? `${c.dnsbl.checked} 个` : '', pts: itemPts(result, 'dnsbl'), title: c.dnsbl.listed.join('、') },
-    { label: 'ASN 一致性', level: loading(c.asn.level), value: c.asn.consistency ? (c.asn.consistency.ok ? (c.asn.consistency.warn ? '需留意' : '一致') : '冲突') : '—', sub: c.asn.consistency ? asnTag(run) : '', pts: itemPts(result, 'asn-conflict') + itemPts(result, 'asn-transit') + itemPts(result, 'leased'), title: c.asn.consistency?.text },
+    asnTile(run, result, loading),
     neighbourTile(c.neighbours, result, loading),
     { label: 'ASN 信誉', level: c.asnRep.level === 'none' ? (run.asnProfile && !run.asnProfile.routes ? 'none' : 'pending') : c.asnRep.level, value: c.asnRep.ratio === undefined ? '—' : c.asnRep.ratio >= 15 ? '较差' : c.asnRep.ratio >= 2 ? '一般' : c.asnRep.ratio < 0.5 ? '良好' : '正常', sub: c.asnRep.ratio === undefined ? '' : `滥用密度 ${c.asnRep.ratio} 倍均值`, pts: itemPts(result, 'asn-abuse') + itemPts(result, 'rpki'), title: c.asnRep.ratio === undefined ? '' : `整个 ASN 每万个地址有 ${c.asnRep.per10k} 个近期上榜，全网平均 ${c.asnRep.baseline}` },
     { label: '开放端口', level: loading(c.ports.level), value: c.ports.ports.length ? esc(c.ports.ports.slice(0, 4).join(', ')) + (c.ports.ports.length > 4 ? '…' : '') : c.ports.level === 'none' ? '—' : '未发现', sub: c.ports.tags.length ? esc(c.ports.tags.join(' ')) : '' },
@@ -242,7 +320,28 @@ export function renderChecks(run, result) {
   $('checks').innerHTML = tiles.map(tile).join('');
 }
 
-/** 人机流量: Cloudflare Radar's human vs bot share of the ASN's HTTP traffic, on the same gradient scale. */
+/** ASN 一致性: the IP's type against its ASN, and the ASN's self-declared type against independent evidence. */
+function asnTile(run, result, loading) {
+  const c = result.checks.asn;
+  const clash = asnClash(run);
+  const rank = { none: 0, good: 1, warn: 2, bad: 3 };
+  const level = clash && rank[clash.level] > rank[c.level] ? clash.level : c.level;
+  const value = clash?.level === 'bad' ? '自报矛盾' : c.consistency ? (c.consistency.ok ? (c.consistency.warn || clash ? '需留意' : '一致') : '冲突') : '—';
+  return { label: 'ASN 一致性', level: loading(level), value, sub: c.consistency || clash ? `${asnTag(run)} ${clash ? declaredTag(run) : ''}` : '',
+    pts: itemPts(result, 'asn-conflict') + itemPts(result, 'asn-transit') + itemPts(result, 'leased'), title: [c.consistency?.text, clash?.text].filter(Boolean).join('\n') };
+}
+
+/** Human share from the left, bot share from the right; they meet at the split. Shares that do not add to 100% leave a gap. */
+function splitBar(human, bot, { compact = false, label = '' } = {}) {
+  const total = Math.max(1, human + bot);
+  const h = Math.round(human * 100); const b = Math.round(bot * 100);
+  const track = `<span class="split-track"><i class="split-human" style="width:${(human / total * 100).toFixed(1)}%"></i><i class="split-bot" style="width:${(bot / total * 100).toFixed(1)}%"></i><i class="split-mid"></i></span>`;
+  return `<span class="split${compact ? ' compact' : ''}" role="img" aria-label="${esc(label || `人类 ${h}%，机器 ${b}%`)}">`
+    + (compact ? track : `<span class="split-ends"><span class="split-end human"><b class="num">${h}%</b>人类</span><span class="split-end bot">机器<b class="num">${b}%</b></span></span>${track}`)
+    + '</span>';
+}
+
+/** 人机流量: Cloudflare Radar's human vs bot share of the ASN's HTTP traffic, human from the left and bots from the right. */
 function botTile(run, result) {
   const b = result.checks.bots;
   const radar = run.asnProfile?.sources?.radar;
@@ -259,8 +358,8 @@ function botTile(run, result) {
     `人类 ${human}% · 机器 ${Math.round(b.bot * 100)}%`, '运营商接入网通常机器占 10–30%；超过 40% 说明这个网络里服务器、爬虫较多，网站更容易弹验证或限流'].join('\n');
   return {
     label: '人机流量', level: b.level, wide: true, title, pts: itemPts(result, 'asn-bots'),
-    value: `<span class="tile-gauge">${gauge(human, { low: '机器', high: '人类', label: `${asn} 人类流量 ${human}%` })}<span class="gauge-badge lv-${b.level}"><strong>${human}%</strong>${level}</span></span>`,
-    sub: `${esc(asn)} · 机器 ${Math.round(b.bot * 100)}%`,
+    value: `<span class="tile-gauge">${splitBar(b.human, b.bot, { label: `${asn} 人类流量 ${human}%，机器流量 ${Math.round(b.bot * 100)}%` })}<span class="gauge-badge lv-${b.level}">${level}</span></span>`,
+    sub: `${esc(asn)} · 运营商接入网通常机器占 10–30%`,
   };
 }
 
@@ -375,15 +474,16 @@ export function renderASN(run, result) {
       <div><div class="asn-number">${asnLink(a.asn)}</div><div class="asn-holder">${esc(a.holder || ipguide?.asName || s.org || '')}</div></div>
       <div class="asn-class">${asnTag(run, 'lg')}<small>推断置信 ${pct(inferred.confidence)}</small></div>
     </div>
+    ${asnClash(run) ? `<p class="asn-verdict lv-${asnClash(run).level}">${icon(asnClash(run).level)}${esc(asnClash(run).text)}</p>` : ''}
     ${consistency ? `<p class="asn-verdict lv-${result.checks.asn.level}">${icon(result.checks.asn.level)}${esc(consistency.text)}</p>` : ''}
     <dl class="kv-list">
       ${row('机房倾向', `<span class="meter"><i style="width:${Math.round((inferred.hosting ?? 0) * 100)}%"></i></span> ${pct(inferred.hosting)}`)}
-      ${row('PeeringDB 自报', a.pdb ? `${esc(a.pdb.type || '—')}${a.pdb.traffic ? ` · ${esc(a.pdb.traffic)}` : ''}${a.pdb.scope ? ` · ${esc(a.pdb.scope)}` : ''}` : '<span class="muted">未登记</span>')}
+      ${row('自报类型', inferred.declared || a.pdb ? `${declaredTag(run)}${a.pdb ? ` <span class="muted small">PeeringDB：${esc([a.pdb.type || '—', a.pdb.traffic, a.pdb.scope].filter(Boolean).join(' · '))}</span>` : ' <span class="muted small">按网络名称</span>'}` : '<span class="muted">未登记</span>')}
       ${row('宣告规模', a.v4ips ? `${a.v4ips.toLocaleString()} 个 IPv4 · ${a.v4prefixes ?? '—'} 个前缀` : '—')}
       ${row('ASN 注册', a.regDate ? `${esc(a.regDate.slice(0, 10))}${a.asCountry ? ` · ${flag(a.asCountry)}${esc(a.asCountry)}` : ''}` : '—')}
       ${row('RPKI', a.rpki ? `<span class="pill pill-${a.rpki === 'valid' ? 'good' : a.rpki === 'invalid' ? 'bad' : 'muted'}">${esc(a.rpki)}</span>` : '—')}
       ${row('ASN 信誉', asnRepTag(run, result))}
-      ${row('机器流量', typeof a.botShare === 'number' ? `${pct(a.botShare)} <span class="muted">Cloudflare Radar</span>` : '<span class="muted">未配置 Radar</span>')}
+      ${row('人机流量', result.checks.bots.bot !== null ? `${splitBar(result.checks.bots.human, result.checks.bots.bot, { compact: true })} <span class="num">人类 ${pct(result.checks.bots.human)} · 机器 ${pct(result.checks.bots.bot)}</span> <span class="muted small">Cloudflare Radar</span>` : '<span class="muted">未配置 Radar</span>')}
       ${row('所在网段', prefix ? `<span class="mono">${ipText(prefix)}</span>` : '—')}
       ${row('登记信息', rdap ? `${esc(rdap.netname || '')} · ${esc(rdap.orgName || '')}${rdap.regDate ? ` · ${esc(rdap.regDate.slice(0, 10))}` : ''}` : '—')}
       ${row('租赁判断', a.lease ? (leaseTag(result) || '<span class="pill pill-good">未见租赁特征</span>') + (a.lease.reasons.length ? ` <span class="muted small">${esc(a.lease.reasons.join('；'))}</span>` : '') : '—')}
@@ -451,8 +551,8 @@ export function renderTypes(run) {
   const supplement = run.ipsuperReturned ? `<div class="type-summary" aria-label="IPSuper 补全结果"><strong>本轮补全了 ${filled.length} 格</strong><p>${filled.length ? filled.map(esc).join(' · ') : '本轮已返回的类型与现有字段没有可补的空格。'}</p></div>` : '';
   $('types').innerHTML = `${supplement}<table class="type-table"><thead><tr><th></th>${ids.map(id => `<th>${esc(SOURCES.find(source => source.id === id)?.name || id)}</th>`).join('')}</tr></thead>
     <tbody>
-      <tr><th scope="row">使用类型</th>${ids.map(id => `<td>${typeCell(run.sources[id], 'usageType', id)}</td>`).join('')}</tr>
-      <tr><th scope="row">公司类型</th>${ids.map(id => `<td>${typeCell(run.sources[id], 'companyType', id)}</td>`).join('')}</tr>
+      <tr><th scope="row">使用类型</th>${ids.map(id => `<td>${markClash(typeCell(run.sources[id], 'usageType', id), run.sources[id], 'usageType', run)}</td>`).join('')}</tr>
+      <tr><th scope="row">公司类型</th>${ids.map(id => `<td>${markClash(typeCell(run.sources[id], 'companyType', id), run.sources[id], 'companyType', run)}</td>`).join('')}</tr>
     </tbody></table>
     <p class="muted small type-summary">使用类型：${esc(tally('usageType'))}；公司类型：${esc(tally('companyType'))}。使用类型参与“网络类型”投票，公司类型作为第三方证据参与 ASN 类型推断。</p>`;
 }

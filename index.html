@@ -9,8 +9,8 @@
   <meta name="referrer" content="strict-origin-when-cross-origin">
   <title>IP 纯净度检测 · Egress</title>
   <link rel="icon" href="./favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="./styles.css?v=2.5">
-  <script type="module" src="./src/main.js?v=4.6"></script>
+  <link rel="stylesheet" href="./styles.css?v=2.6">
+  <script type="module" src="./src/main.js?v=4.7"></script>
 </head>
 <body>
   <a class="skip-link" href="#main">跳到检测结果</a>
@@ -27,6 +27,7 @@
         <div class="score-row">
           <div id="score-ring" class="score-ring" role="img" aria-label="正在检测">
             <svg viewBox="0 0 120 120" class="ring" aria-hidden="true"><circle cx="60" cy="60" r="52" class="ring-track"/></svg>
+            <i class="ring-arc" aria-hidden="true"></i><i class="ring-cap" aria-hidden="true"></i><i class="ring-cap ring-tip" aria-hidden="true"></i>
             <div class="ring-text"><strong>—</strong><span>检测中</span></div>
           </div>
           <div id="verdict" class="verdict"><p class="verdict-text muted">正在联合数据库、黑名单与连接实测生成评分…</p></div>

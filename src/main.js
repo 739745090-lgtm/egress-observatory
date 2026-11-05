@@ -8,11 +8,11 @@ import { lookupPage } from './page-lookups.js?v=4';
 import { getJSON, parseIP, isPublicIP, sameIP, maskIP, maskText } from './util.js?v=4.1';
 import { SOURCES, runSource } from './sources.js?v=3.2';
 import { DNSBLS, checkDNSBL, CIDR_LISTS, checkCIDRList, asnAbuseDensity } from './blocklists.js';
-import { fetchASN, inferASN, detectLease } from './asn.js?v=4.2';
+import { fetchASN, inferASN, detectLease } from './asn.js?v=4.3';
 import { detectEgress, summarizeEgress, probeWebRTC, probeDNS, classifyDNS, probeTCP, probeEnvironment, probeIPv6, classifyIPv6, traceProbe } from './probes.js';
 import { runTurnstile, runRecaptcha } from './captcha.js?v=4.2';
 import { score } from './score.js?v=4.0';
-import * as view from './render.js?v=4.3';
+import * as view from './render.js?v=4.4';
 
 const $ = id => document.getElementById(id);
 const app = {

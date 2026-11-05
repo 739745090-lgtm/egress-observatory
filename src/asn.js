@@ -50,9 +50,15 @@ export const CLASS_LABEL = {
 export function inferASN({ asn, names = [], pdb = null, v4ips = null, botShare = null, ipapiType = null, ipinfoType = null, companyTypes = [], regDate = null }) {
   const votes = {}; const reasons = [];
   // Self-declared evidence (PeeringDB entry, network name) is what "ISP proxy" sellers dress up,
-  // so a verdict without any independent evidence gets a lower confidence.
+  // so a verdict without any independent evidence gets a lower confidence, and the two sides are
+  // also tallied apart so a self-declared ISP that independent data calls a datacenter can be flagged.
   let independent = false;
-  const vote = (cls, weight, reason, own = false) => { votes[cls] = (votes[cls] || 0) + weight; if (reason) reasons.push(reason); if (!own) independent = true; };
+  const own = { votes: {}, by: [] }; const seen = {};
+  const vote = (cls, weight, reason, self = false) => {
+    votes[cls] = (votes[cls] || 0) + weight;
+    if (reason) reasons.push(reason);
+    if (self) { own.votes[cls] = (own.votes[cls] || 0) + weight; if (reason) own.by.push(reason); } else { independent = true; seen[cls] = (seen[cls] || 0) + weight; }
+  };
   const known = KNOWN.get(asn);
   if (known) vote(known, 3, `AS${asn} 在已知${CLASS_LABEL[known]}名单中`);
   if (TRANSIT_HOSTING.has(asn)) vote('hosting', 1.2, '该骨干网同时经营大量机房 / 跨境专线业务');
@@ -99,7 +105,34 @@ export function inferASN({ asn, names = [], pdb = null, v4ips = null, botShare =
   if (!independent) { confidence *= 0.65; reasons.push('只有 ASN 自报的信息（PeeringDB、名称），没有第三方佐证'); }
   // Share of each class, for the mixed "ISP / 机房" style tags.
   const mix = ranked.map(([value, weight]) => ({ value, share: Math.round(weight / total * 100) / 100 }));
-  return { cls, label: CLASS_LABEL[cls], hosting: Math.round(hosting * 100) / 100, confidence: Math.round(confidence * 100) / 100, reasons, votes, mix };
+  const { declared, observed, conflict } = selfCheck(own, seen);
+  return { cls, label: CLASS_LABEL[cls], hosting: Math.round(hosting * 100) / 100, confidence: Math.round(confidence * 100) / 100, reasons, votes, mix, declared, observed, conflict };
+}
+
+const ACCESS = new Set(['isp', 'mobile']);
+const DATACENTER = new Set(['hosting', 'cdn']);
+const leader = tally => Object.entries(tally).sort((a, b) => b[1] - a[1])[0] || null;
+
+/**
+ * What the ASN says about itself (PeeringDB, its name) against what independent data says.
+ * bad: claims an access / business / research network while independent evidence is mostly datacenter.
+ * warn: claims datacenter / content while independent evidence is clearly an access network.
+ */
+function selfCheck(own, seen) {
+  const ownTop = leader(own.votes);
+  const declared = ownTop ? { cls: ownTop[0], label: CLASS_LABEL[ownTop[0]], by: own.by } : null;
+  const seenTotal = Object.values(seen).reduce((sum, weight) => sum + weight, 0);
+  const seenTop = leader(seen);
+  if (!seenTop || seenTotal < 1.5) return { declared, observed: null, conflict: null };
+  const dc = ((seen.hosting || 0) + (seen.cdn || 0)) / seenTotal;
+  const observed = { cls: seenTop[0], label: CLASS_LABEL[seenTop[0]], share: Math.round(seenTop[1] / seenTotal * 100) / 100, hosting: Math.round(dc * 100) / 100 };
+  let conflict = null;
+  if (declared && !DATACENTER.has(declared.cls) && declared.cls !== 'transit' && DATACENTER.has(observed.cls) && dc >= 0.5) {
+    conflict = { level: 'bad', text: `自报${declared.label}，但独立证据指向${observed.label}（机房倾向 ${Math.round(dc * 100)}%）` };
+  } else if (declared && DATACENTER.has(declared.cls) && ACCESS.has(observed.cls) && observed.share >= 0.6) {
+    conflict = { level: 'warn', text: `自报${declared.label}，但独立证据更像${observed.label}` };
+  }
+  return { declared, observed, conflict };
 }
 
 const tokens = value => new Set(String(value || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/)
