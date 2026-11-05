@@ -1,6 +1,6 @@
 import { sameIP } from './util.js';
 
-const columns = new Map(Object.entries({ IPInfo:'ipinfo', IP2Location:'ip2location', IPRegistry:'ipregistry', 'IP-API':'ipapi', IPData:'ipdata', AbuseIPDB:'abuseipdb', DBIP:'dbip' }));
+const columns = new Map(Object.entries({ IPInfo:'ipinfo', IPinfo:'ipinfo', IP2Location:'ip2location', IPRegistry:'ipregistry', 'IP-API':'ipapi', 'ip-api.com':'ipapi', IPData:'ipdata', AbuseIPDB:'abuseipdb', DBIP:'dbip', 'DB-IP':'dbip', Proxycheck:'proxycheck', IPQualityScore:'ipqs', 'ipapi.is':'ipapiis', IPLocate:'iplocate', GeoIPLookup:'geoiplookup', IPHub:'iphub', IPQuery:'ipquery', 'Blackbox v3 beta':'blackbox' }));
 const types = new Map(Object.entries({ '机房':'hosting', '家宽':'residential', '移动':'mobile', '移动网络':'mobile', '商业':'business', '企业':'business', '教育':'education', '政府':'government' }));
 
 // This bookmark runs on the open report. Read visible cells in column order, including blanks.

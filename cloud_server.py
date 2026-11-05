@@ -36,12 +36,12 @@ def cors(response):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "apiVersion": 2, "providers": ["ipinfo", "ipsuper"]}
+    return {"status": "ok", "apiVersion": 3, "providers": ["ipinfo", "ipsuper", "sources"]}
 
 
 @app.route("/lookup/<provider>", methods=["POST", "OPTIONS"])
 def report(provider):
-    if provider not in {"ipinfo", "ipsuper", "getipintel"}:
+    if provider not in {"ipinfo", "ipsuper", "sources", "getipintel"}:
         return {"error": "未知来源"}, 404
     if request.headers.get("Origin") not in ORIGINS:
         return {"error": "来源未获允许"}, 403

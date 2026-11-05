@@ -422,12 +422,12 @@ const UT_TIP = {
 
 function typeCell(record, field, id) {
   if (!record || record.status === 'pending') return `<span class="ut ut-pending">${icon('pending')}</span>`;
-  if (record.status === 'skip') return '<span class="ut ut-off" tabindex="0" data-tip="需要在后端配置该数据库的 API key">未配置</span>';
+  if (record.status === 'skip') return `<span class="ut ut-off" tabindex="0" data-tip="${esc(record.webLookup?.error || '需要在后端配置该数据库的 API key')}">${record.webLookup ? '网页受限' : '未配置'}</span>`;
   if (record.status !== 'ok') return `<span class="ut ut-off" tabindex="0" data-tip="${esc(record.error || '请求失败')}">失败</span>`;
   if (field === 'companyType' && !GIVES_COMPANY.has(id) && !record.data.companyType) return '<span class="muted">—</span>';
   const value = record.data[field];
-  if (!value) return `<span class="ut ut-unknown" tabindex="0" data-tip="${esc(field === 'usageType' ? '这个来源没有给出使用类型（免费接口或套餐不含该字段）' : '这个来源没有给出公司类型')}">未知</span>`;
-  const via = record.data.importedFields?.includes(field) ? 'IPSuper' : field === 'usageType' ? record.data.usageVia : null;
+  if (!value) return `<span class="ut ut-unknown" tabindex="0" data-tip="${esc([field === 'usageType' ? '这个来源没有给出明确的使用类型' : '这个来源没有给出公司类型',record.webLookup?.error || (record.webLookup?.status === 'ok' ? '官方网页已读取' : '')].filter(Boolean).join(' · '))}">${esc(field === 'usageType' && record.data.usageDetail || '未知')}</span>`;
+  const via = record.data.importedFields?.includes(field) ? 'IPSuper' : record.data.webTypeFields?.includes(field) ? '官方网页' : field === 'usageType' ? record.data.usageVia : null;
   const hint = [SOURCES.find(source => source.id === id)?.name, UT_TIP[value], via && '补充来源：'+via].filter(Boolean).join('\n');
   return `<span class="ut ut-${esc(value)}" tabindex="0" data-tip="${esc(hint)}">${esc(UT_LABEL[value] || value)}</span>`;
 }

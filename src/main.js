@@ -1,9 +1,10 @@
 import { lookupIPOK, lookupDBIPWeb, fillSource } from './supplements.js?v=2';
 import { readIPinfoPage, mergeIPinfoPage } from './ipinfo-page.js?v=3.4';
-import { setupImport, supplementTypes, readReport } from './ipsuper.js?v=3.1';
+import { setupImport, supplementTypes, readReport } from './ipsuper.js?v=3.2';
+import { setupProviderImport, readProviderReport, mergeProviderPage, PAGE_SOURCES } from './provider-pages.js?v=1';
 /** Orchestration: detect the egress, fan out every check, rescore as results arrive. */
 import { API_BASE, PAGE_LOOKUP_CLOUD } from '../config.js?v=cloud2';
-import { lookupPage } from './page-lookups.js?v=3';
+import { lookupPage } from './page-lookups.js?v=4';
 import { getJSON, parseIP, isPublicIP, sameIP, maskIP, maskText } from './util.js?v=4.1';
 import { SOURCES, runSource } from './sources.js?v=3.2';
 import { DNSBLS, checkDNSBL, CIDR_LISTS, checkCIDRList, asnAbuseDensity } from './blocklists.js';
@@ -11,7 +12,7 @@ import { fetchASN, inferASN, detectLease } from './asn.js?v=4.2';
 import { detectEgress, summarizeEgress, probeWebRTC, probeDNS, classifyDNS, probeTCP, probeEnvironment, probeIPv6, classifyIPv6, traceProbe } from './probes.js';
 import { runTurnstile, runRecaptcha } from './captcha.js?v=4.2';
 import { score } from './score.js?v=4.0';
-import * as view from './render.js?v=4.2';
+import * as view from './render.js?v=4.3';
 
 const $ = id => document.getElementById(id);
 const app = {
@@ -177,7 +178,7 @@ async function startRun(input, fetchPages = true) {
   const self = Boolean(egress?.ips?.some(ip => sameIP(ip, parsed.ip)));
   const run = {
     ip: parsed.ip, v: parsed.v, self, controller, healthReady, startedAt: Date.now(),
-    sources: {}, dnsbl: [], lists: [], asn: null, asnProfile: null, probes: {}, result: null,
+    sources: {}, providerPages: sameIP(importedProviderIP, parsed.ip) ? {...importedProviderPages} : {}, dnsbl: [], lists: [], asn: null, asnProfile: null, probes: {}, result: null,
   };
   app.run = run;
   $('ip-input').value = parsed.ip;
@@ -220,6 +221,7 @@ async function startRun(input, fetchPages = true) {
     const abuse = records.get('abuseipdb')?.data;
     for (const [id, record] of records) {
       let data = id === 'ipinfo' ? mergeIPinfoPage(record, run.ipinfoPage) : record;
+      data = mergeProviderPage(data, run.providerPages[id], SOURCES.find(source => source.id === id)?.name || id);
       if (id === 'ipinfo' && !data.data?.usageType && abuse?.usageType) {
         const d = {...data.data, flags:data.data?.flags || {}, usageType:abuse.usageType, type:data.data?.type || abuse.usageType, usageVia:'AbuseIPDB'};
         data = {...data,status:'ok',directStatus:data.status,error:null,data:d};
@@ -237,7 +239,7 @@ async function startRun(input, fetchPages = true) {
         data = fillSource(data, {flags:row.flags, webRiskScore:row.percent, webObservedAt:row.observedAt}, 'IPOK 逐库观察'+(row.observedAt ? ' · '+row.observedAt : ''));
       }
       data = supplementTypes(data, webTypes(parsed.ip, id));
-      if (row?.unavailable && data.status !== 'ok') data = {...data,error:row.reason === 'cached_only' ? '网页暂无该 IP 的缓存记录' : '网页来源暂缺 · '+row.reason};
+      if (row?.unavailable && data.status !== 'ok' && !data.webLookup) data = {...data,error:row.reason === 'cached_only' ? '网页暂无该 IP 的缓存记录' : '网页来源暂缺 · '+row.reason};
       run.sources[id] = data;
     }
   }
@@ -252,10 +254,10 @@ async function startRun(input, fetchPages = true) {
       ipokRows = Object.fromEntries(['iphub','vpnapi','scamalytics','ipqs'].map(id => [id,{unavailable:true,reason:error.message}]));
       refreshTypes(); scheduleRender();
     });
-    const statuses = {ipinfo:'IPinfo 查询中', ipsuper:'IPSuper 查询中'};
+    const statuses = {ipinfo:'IPinfo 查询中', ipsuper:'IPSuper 查询中',sources:'缺失来源网页查询中'};
     pageStatus.textContent = Object.values(statuses).join(' · ');
     for (const provider of Object.keys(statuses)) {
-      const name = provider === 'ipinfo' ? 'IPinfo' : 'IPSuper';
+      const name = provider === 'sources' ? '来源网页' : provider === 'ipinfo' ? 'IPinfo' : 'IPSuper';
       lookupPage(provider, parsed.ip, signal, message => {
         if (!alive()) return;
         statuses[provider] = name + '：' + message;
@@ -264,7 +266,12 @@ async function startRun(input, fetchPages = true) {
         .then(report => {
           if (!alive()) return;
           if (!sameIP(report.ip, parsed.ip)) throw Error('返回的 IP 不匹配');
-          if (provider === 'ipinfo') {
+          if (provider === 'sources') {
+            const pages = readProviderReport(report,parsed.ip);
+            run.providerPages = {...pages,...run.providerPages};
+            const ok = Object.values(pages).filter(row => row.status === 'ok').length;
+            statuses.sources = `来源网页已返回 ${ok}/${Object.keys(pages).length}，逐源状态见下表`;
+          } else if (provider === 'ipinfo') {
             run.ipinfoPage = readIPinfoPage(report.text, parsed.ip);
             const d = run.ipinfoPage;
             statuses.ipinfo = ['IPinfo 网页已读取', d.companyName, d.asnType && 'ASN 类型 '+d.asnType,
@@ -276,7 +283,14 @@ async function startRun(input, fetchPages = true) {
             statuses.ipsuper = 'IPSuper 网页已读取';
           }
           refreshTypes(); scheduleRender();
-        }).catch(error => { if (alive()) statuses[provider] = name+'：'+error.message; })
+        }).catch(error => {
+          if (!alive()) return;
+          statuses[provider] = name+'：'+error.message;
+          if (provider === 'sources') {
+            for (const id of PAGE_SOURCES) run.providerPages[id] ??= {status:'error',error:error.message};
+            refreshTypes(); scheduleRender();
+          }
+        })
         .finally(() => { if (alive()) pageStatus.textContent = Object.values(statuses).join(' ｜ '); });
     }
   }
@@ -449,6 +463,22 @@ $('ipinfo-apply').addEventListener('click', () => {
   } catch (error) { $('ipinfo-message').textContent = error.message; }
 });
 const importedTypes = setupImport();
+const importedProviderIP = new URL(location.href).searchParams.get('ip');
+const importedProviderPages = setupProviderImport();
+$('provider-apply').addEventListener('click', () => {
+  const run = app.run;
+  if (!run) return;
+  try {
+    const pages = readProviderReport(JSON.parse($('provider-text').value),run.ip);
+    for (const [id,page] of Object.entries(pages)) {
+      run.providerPages[id] = page;
+      run.sources[id] = mergeProviderPage(run.sources[id] || {},page,SOURCES.find(source => source.id === id)?.name || id);
+    }
+    $('provider-text').value = '';
+    $('provider-message').textContent = `已导入 ${Object.keys(pages).length} 个来源网页的目标字段`;
+    scheduleRender();
+  } catch (error) { $('provider-message').textContent = error.message; }
+});
 const requested = new URLSearchParams(location.search).get('ip');
 view.initTooltips();
 view.applyMask(app.masked);

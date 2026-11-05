@@ -23,7 +23,9 @@ export async function lookupPage(provider, ip, signal, progress = () => {}) {
   const relay = { url: `${API_BASE}/v1/page/${provider}?ip=${encodeURIComponent(ip)}`, method: 'GET', timeout: 65000 };
   const direct = { url: `${PAGE_LOOKUP_CLOUD}/lookup/${provider}`, method: 'POST', timeout: 145000 };
   const local = PAGE_LOOKUP_BASE !== PAGE_LOOKUP_CLOUD;
-  const routes = local
+  const routes = provider === 'sources'
+    ? (local ? [{url:`${PAGE_LOOKUP_BASE}/lookup/sources`,method:'POST',timeout:110000}, direct] : [direct, {...direct,timeout:65000}])
+    : local
     ? [{ url: `${PAGE_LOOKUP_BASE}/lookup/${provider}`, method: 'POST', timeout: 110000 }, { ...relay, timeout: 90000 }, { ...direct, timeout: 35000 }]
     : [direct, relay, { ...direct, timeout: 25000 }];
   const deadline = AbortSignal.timeout(240000);
@@ -59,7 +61,8 @@ export async function lookupPage(provider, ip, signal, progress = () => {}) {
       }
       if (!sameIP(report.ip, ip)) throw Error('返回的 IP 不匹配');
       if (!Number.isFinite(report.time) || Math.abs(Date.now() - report.time) > 600000) throw Error('网页报告时间无效，请重新查询');
-      if (provider === 'ipinfo' ? typeof report.text !== 'string' || !report.text.includes('Summary')
+      if (provider === 'sources' ? !report.sources || typeof report.sources !== 'object' || Array.isArray(report.sources)
+        : provider === 'ipinfo' ? typeof report.text !== 'string' || !report.text.includes('Summary')
         : !Array.isArray(report.headers) || !Array.isArray(report.rows?.['使用类型']) || !Array.isArray(report.rows?.['公司类型'])) {
         throw Error('网页报告字段不完整');
       }

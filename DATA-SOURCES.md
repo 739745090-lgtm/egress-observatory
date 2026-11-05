@@ -32,12 +32,13 @@
 
 [官方 CHECK 文档](https://docs.abuseipdb.com/#check-endpoint)明确位置、使用类型、ISP 与域名来自 IPinfo。后端已有独立的密钥配置入口；未配置时显示“未配置密钥”，这些字段保持未知。AbuseIPDB 自身的举报分保留其独立来源。
 
-## 未自动抓取的页面
+## 来源网页补全
 
-Scamalytics、IPPure 等网页可显示更多信息，但公开条款对自动抓取或数据再分发有明确限制。本站保留已有官方 API 或查询链接，未用网页抓取、借用他人密钥、轮换出口或绕过验证码来替代授权接口。
+按 2026-11-05 的用户请求，对字段不足的来源增加单目标网页读取：IPHub、IPQualityScore、IPData、IPRegistry、DB-IP、Scamalytics、ipapi.is、IPQuery、Blackbox。固定目标地址、有限等待，成功和失败均逐源展示。遇到人机校验时停止读取并保留原因；网页未显示的字段保持未知，接口已提供的字段优先。
 
-- [Scamalytics 条款](https://scamalytics.com/terms-of-service/)
-- [IPPure 条款](https://ippure.com/en/terms-privacy)
+IPHub 的 `block=0` 覆盖家宽和商业，只展示“家宽或商业”；`block=1` 覆盖代理、VPN 和机房，只展示该组合标签。两者均不推导单独的使用类型。IPQualityScore 只使用目标表格中的明确 VPN、PROXY、TOR 字段及明确风险分。Scamalytics 风险与匿名标记保持同库合并，地理字段不重复投票。
+
+用户可在多源类型区展开“从来源网页补全”，通过书签从自己的官方查询页回传当前目标字段，或粘贴报告 JSON；核对 IP 与 10 分钟有效期。IPPure 继续仅提供查询链接。
 
 ## Net.Coffee 的底层来源
 

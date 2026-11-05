@@ -11,11 +11,14 @@ from urllib.parse import urlsplit
 ROOT = Path(__file__).resolve().parent
 LOCAL = "http://127.0.0.1:4187"
 ORIGINS = {LOCAL, "http://localhost:4187", "https://blackslience-reaper.github.io"}
-LOCKS = {name: threading.Lock() for name in ("ipsuper", "ipinfo")}
+LOCKS = {name: threading.Lock() for name in ("ipsuper", "ipinfo", "sources")}
 CACHES = {name: {} for name in LOCKS}
 
 
 def lookup(ip, provider):
+    if provider == "sources":
+        from provider_pages import lookup_sources
+        return lookup_sources(ip)
     from playwright.sync_api import sync_playwright
     with sync_playwright() as api:
         options = {"headless": True}
@@ -90,7 +93,7 @@ class Handler(SimpleHTTPRequestHandler):
         self.reply(200 if self.headers.get("Origin") in ORIGINS else 403, {})
 
     def do_POST(self):
-        if (self.path not in {"/lookup/ipsuper","/lookup/ipinfo"} or self.headers.get("Origin") not in ORIGINS
+        if (self.path not in {"/lookup/" + name for name in LOCKS} or self.headers.get("Origin") not in ORIGINS
             or self.headers.get("Host") not in {"127.0.0.1:4188","localhost:4188"}
             or self.headers.get_content_type() != "application/json"):
             return self.reply(403, {})
@@ -124,7 +127,7 @@ class Handler(SimpleHTTPRequestHandler):
     def do_GET(self):
         path = urlsplit(self.path).path
         if path == "/health":
-            return self.reply(200, {"status": "ok", "providers": ["ipinfo", "ipsuper"]})
+            return self.reply(200, {"status": "ok", "providers": list(LOCKS)})
         allowed = {"/","/index.html","/config.js","/styles.css","/favicon.svg"}
         if path not in allowed and path not in {"/src/"+p.name for p in (ROOT/"src").glob("*.js")}:
             return self.send_error(404)
