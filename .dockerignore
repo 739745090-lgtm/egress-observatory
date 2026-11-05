@@ -1,0 +1,4 @@
+*
+!Dockerfile
+!cloud_server.py
+!local_server.py
