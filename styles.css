@@ -181,13 +181,42 @@ h1 { font-size: 24px; line-height: 1.3; font-weight: 700; letter-spacing: -.01em
 
 /* uses */
 .uses { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-.use { background: var(--panel-2); border: 1px solid var(--line); border-top: 3px solid var(--dim); border-radius: 10px; padding: 9px 10px 10px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-.use-name { font-size: 12.5px; font-weight: 650; }
-.use-level { align-self: flex-start; font-size: 12px; font-weight: 650; border-radius: 6px; padding: 1px 7px; background: var(--panel-3); color: var(--muted); }
+.use { background: var(--panel-2); border: 1px solid var(--line); border-top: 3px solid var(--dim); border-radius: 10px; padding: 9px 10px 10px; display: flex; flex-direction: column; gap: 6px; min-width: 0; container-type: inline-size; }
+.use[data-tip] { cursor: help; }
+.use-head { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.use-name { font-size: 12.5px; font-weight: 650; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .use-why { font-size: 11.5px; color: var(--muted); line-height: 1.4; }
-.use.lv-good { border-top-color: var(--good); } .use.lv-good .use-level { background: var(--good-bg); color: var(--good); }
-.use.lv-warn { border-top-color: var(--warn); } .use.lv-warn .use-level { background: var(--warn-bg); color: var(--warn); }
-.use.lv-bad { border-top-color: var(--bad); } .use.lv-bad .use-level { background: var(--bad-bg); color: var(--bad); }
+.use-items { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; font-size: 11.5px; line-height: 1.45; color: var(--muted); }
+.use-items li { display: flex; gap: 6px; min-width: 0; }
+.use-items b { flex: none; min-width: 30px; color: var(--bad); font-weight: 650; }
+.use-items span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.use.lv-good { border-top-color: var(--good); } .use.lv-warn { border-top-color: var(--warn); } .use.lv-bad { border-top-color: var(--bad); }
+
+/* score badge: "82 可以" */
+.use-badge, .gauge-badge { flex: none; display: inline-flex; align-items: baseline; gap: 5px; padding: 3px 8px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--panel-3); color: var(--muted); font-size: 11.5px; font-weight: 650; white-space: nowrap; }
+.use-badge { margin-left: auto; }
+.use-badge strong, .gauge-badge strong { font-size: 19px; font-weight: 750; line-height: 1; letter-spacing: -.01em; }
+.lv-good .use-badge, .gauge-badge.lv-good { color: var(--good); background: var(--good-bg); border-color: rgba(52, 211, 153, .25); }
+.lv-warn .use-badge, .gauge-badge.lv-warn { color: var(--warn); background: var(--warn-bg); border-color: rgba(251, 191, 36, .25); }
+.lv-bad .use-badge, .gauge-badge.lv-bad { color: var(--bad); background: var(--bad-bg); border-color: rgba(248, 113, 113, .25); }
+
+/* gradient gauge: red → yellow → green track, white marker at the value, 0–100 scale */
+.gauge { display: block; flex: 1 1 auto; min-width: 0; padding-top: 4px; }
+.gauge-track { position: relative; display: block; height: 8px; border-radius: 99px; background: linear-gradient(90deg, var(--bad) 0%, #fb923c 24%, var(--warn) 48%, #a3e635 74%, var(--good) 100%); }
+.gauge-mark { position: absolute; top: 50%; width: 4px; height: 16px; border-radius: 2px; background: #fff; transform: translate(-50%, -50%); box-shadow: 0 0 0 1.5px rgba(11, 12, 15, .8), 0 1px 4px rgba(0, 0, 0, .55); transition: left .5s ease; }
+.gauge-scale { position: relative; display: block; height: 14px; margin-top: 6px; font-size: 10px; line-height: 14px; color: var(--muted); white-space: nowrap; }
+.gauge-scale span { position: absolute; top: 0; transform: translateX(-50%); }
+.gauge-scale span:first-child { left: 0; transform: none; }
+.gauge-scale span:last-child { left: 100%; transform: translateX(-100%); }
+.gauge-scale em { font-style: normal; }
+@container (max-width: 240px) { .gauge-scale .g25 { display: none; } }
+@container (max-width: 190px) { .gauge-scale em { display: none; } }
+@media (prefers-reduced-motion: reduce) { .gauge-mark { transition: none; } }
+
+/* wide verdict tile with a gauge (人机流量) */
+.tile.tile-wide { grid-column: 1 / -1; }
+.tile-gauge { display: flex; align-items: center; gap: 14px; flex: 1 1 100%; min-width: 0; font-weight: 400; }
+.tile-gauge .gauge { max-width: 420px; }
 
 /* captcha */
 .captcha { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }

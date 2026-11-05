@@ -187,8 +187,17 @@ export function renderEgress(egress, run, view) {
 
 // ---------- verdict tiles ----------
 
-function tile({ label, level, value, sub, pts, title }) {
-  return `<div class="tile lv-${level}${pts >= 1 ? ' has-pen' : ''}" ${title ? `tabindex="0" data-tip="${esc(title)}"` : ''}>
+/** Gradient meter, red → yellow → green, with a marker at value (0–100) and a 0 / 25 / 50 / 75 / 100 scale. */
+function gauge(value, { low = '高危', high = '可信', label = '' } = {}) {
+  const v = Math.max(0, Math.min(100, Math.round(value)));
+  return `<span class="gauge" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${v}"${label ? ` aria-label="${esc(label)}"` : ''}>`
+    + `<span class="gauge-track"><i class="gauge-mark" style="left:clamp(2px, ${v}%, calc(100% - 2px))"></i></span>`
+    + `<span class="gauge-scale" aria-hidden="true"><span>0<em> ${esc(low)}</em></span><span class="g25" style="left:25%">25</span><span style="left:50%">50</span><span style="left:75%">75</span><span>100<em> ${esc(high)}</em></span></span>`
+    + '</span>';
+}
+
+function tile({ label, level, value, sub, pts, title, wide = false }) {
+  return `<div class="tile lv-${level}${pts >= 1 ? ' has-pen' : ''}${wide ? ' tile-wide' : ''}" ${title ? `tabindex="0" data-tip="${esc(title)}"` : ''}>
     <div class="tile-head">${icon(level)}<span class="tile-label">${esc(label)}</span>${pen(pts)}</div>
     <div class="tile-value">${value}${sub ? ` <small>${sub}</small>` : ''}</div>
   </div>`;
@@ -217,10 +226,33 @@ export function renderChecks(run, result) {
     { label: '黑名单', level: loading(c.dnsbl.level), value: c.dnsbl.listed.length ? `收录 ${c.dnsbl.listed.length}` : c.dnsbl.checked ? '未收录' : '—', sub: c.dnsbl.checked ? `${c.dnsbl.checked} 个` : '', pts: itemPts(result, 'dnsbl'), title: c.dnsbl.listed.join('、') },
     { label: 'ASN 一致性', level: loading(c.asn.level), value: c.asn.consistency ? (c.asn.consistency.ok ? (c.asn.consistency.warn ? '需留意' : '一致') : '冲突') : '—', sub: c.asn.consistency ? asnTag(run) : '', pts: itemPts(result, 'asn-conflict') + itemPts(result, 'asn-transit') + itemPts(result, 'leased'), title: c.asn.consistency?.text },
     neighbourTile(c.neighbours, result, loading),
-    { label: 'ASN 信誉', level: c.asnRep.level === 'none' ? (run.asnProfile && !run.asnProfile.routes ? 'none' : 'pending') : c.asnRep.level, value: c.asnRep.ratio === undefined ? '—' : c.asnRep.ratio >= 15 ? '较差' : c.asnRep.ratio >= 2 ? '一般' : c.asnRep.ratio < 0.5 ? '良好' : '正常', sub: c.asnRep.ratio === undefined ? '' : `滥用密度 ${c.asnRep.ratio} 倍均值`, pts: itemPts(result, 'asn-abuse') + itemPts(result, 'asn-bots') + itemPts(result, 'rpki'), title: c.asnRep.ratio === undefined ? '' : `整个 ASN 每万个地址有 ${c.asnRep.per10k} 个近期上榜，全网平均 ${c.asnRep.baseline}` },
+    { label: 'ASN 信誉', level: c.asnRep.level === 'none' ? (run.asnProfile && !run.asnProfile.routes ? 'none' : 'pending') : c.asnRep.level, value: c.asnRep.ratio === undefined ? '—' : c.asnRep.ratio >= 15 ? '较差' : c.asnRep.ratio >= 2 ? '一般' : c.asnRep.ratio < 0.5 ? '良好' : '正常', sub: c.asnRep.ratio === undefined ? '' : `滥用密度 ${c.asnRep.ratio} 倍均值`, pts: itemPts(result, 'asn-abuse') + itemPts(result, 'rpki'), title: c.asnRep.ratio === undefined ? '' : `整个 ASN 每万个地址有 ${c.asnRep.per10k} 个近期上榜，全网平均 ${c.asnRep.baseline}` },
     { label: '开放端口', level: loading(c.ports.level), value: c.ports.ports.length ? esc(c.ports.ports.slice(0, 4).join(', ')) + (c.ports.ports.length > 4 ? '…' : '') : c.ports.level === 'none' ? '—' : '未发现', sub: c.ports.tags.length ? esc(c.ports.tags.join(' ')) : '' },
+    botTile(run, result),
   ];
   $('checks').innerHTML = tiles.map(tile).join('');
+}
+
+/** 人机流量: Cloudflare Radar's human vs bot share of the ASN's HTTP traffic, on the same gradient scale. */
+function botTile(run, result) {
+  const b = result.checks.bots;
+  const radar = run.asnProfile?.sources?.radar;
+  const asn = run.asnProfile?.asn ? `AS${run.asnProfile.asn}` : 'ASN';
+  if (b.bot === null) {
+    const value = !run.asnProfile ? '检测中' : radar === 'skip' ? '未配置' : '无数据';
+    const title = radar === 'skip' ? '人机流量需要后端配置 CF_RADAR_TOKEN（Cloudflare Radar 只读 token）后才能查询'
+      : radar === 'error' ? `Cloudflare Radar 没有 ${asn} 的流量数据` : '';
+    return { label: '人机流量', level: run.asnProfile ? 'none' : 'pending', value, sub: 'Cloudflare Radar', title, wide: true };
+  }
+  const human = Math.round(b.human * 100);
+  const level = { good: '人类为主', warn: '人机混合', bad: '机器为主' }[b.level];
+  const title = [`人机流量：${asn} 近 ${b.window === '28d' ? '28 天' : b.window || '一段时间'}的 HTTP 请求里人类与机器的比例（Cloudflare Radar）`,
+    `人类 ${human}% · 机器 ${Math.round(b.bot * 100)}%`, '运营商接入网通常机器占 10–30%；超过 40% 说明这个网络里服务器、爬虫较多，网站更容易弹验证或限流'].join('\n');
+  return {
+    label: '人机流量', level: b.level, wide: true, title, pts: itemPts(result, 'asn-bots'),
+    value: `<span class="tile-gauge">${gauge(human, { low: '机器', high: '人类', label: `${asn} 人类流量 ${human}%` })}<span class="gauge-badge lv-${b.level}"><strong>${human}%</strong>${level}</span></span>`,
+    sub: `${esc(asn)} · 机器 ${Math.round(b.bot * 100)}%`,
+  };
 }
 
 function neighbourTile(nb, result, loading) {
@@ -233,10 +265,28 @@ function neighbourTile(nb, result, loading) {
 
 const USE_LABELS = { stream: '流媒体', ai: 'AI 服务', captcha: '验证码', account: '注册付款', mail: '发邮件', social: '社媒 / TikTok' };
 const USE_LEVEL = { good: '可以', warn: '看情况', bad: '不建议' };
+// Each use case is its own 0–100 meter on the gradient gauge: < 50 不建议, 50–74 看情况, ≥ 75 可以.
 export function renderUses(result) {
   $('uses').innerHTML = Object.entries(USE_LABELS).map(([id, name]) => {
     const use = result.uses[id];
-    return `<div class="use lv-${use?.level || 'none'}" tabindex="0" data-tip="${esc(use?.why || '')}"><span class="use-name">${esc(name)}</span><span class="use-level">${esc(USE_LEVEL[use?.level] || '—')}</span><span class="use-why">${esc(use?.why || '')}</span></div>`;
+    if (!use) return `<div class="use lv-none"><div class="use-head"><span class="use-name">${esc(name)}</span><span class="use-badge"><strong>—</strong></span></div></div>`;
+    const tip = [
+      `${name} ${use.score} 分 · ${USE_LEVEL[use.level]}`,
+      use.gate ? `封顶：${use.gate}` : '',
+      ...use.items.map(item => `−${fmt(item.pts)} ${item.label}${item.detail ? `：${item.detail}` : ''}`),
+      use.items.length ? '' : use.why,
+      use.note,
+      '100 起算；≥ 75 可以，50–74 看情况，< 50 不建议',
+    ].filter(Boolean).join('\n');
+    const top = use.items.slice(0, 2);
+    const body = use.gate ? `<span class="use-why">${esc(use.gate)}</span>`
+      : top.length ? `<ul class="use-items">${top.map(item => `<li><b>−${fmt(item.pts)}</b><span>${esc(item.label)}</span></li>`).join('')}</ul>`
+        : `<span class="use-why">${esc(use.why)}</span>`;
+    return `<div class="use lv-${use.level}" tabindex="0" data-tip="${esc(tip)}">
+      <div class="use-head"><span class="use-name">${esc(name)}</span><span class="use-badge"><strong>${use.score}</strong>${esc(USE_LEVEL[use.level])}</span></div>
+      ${gauge(use.score, { label: `${name} ${use.score} 分` })}
+      ${body}
+    </div>`;
   }).join('');
 }
 

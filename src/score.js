@@ -345,9 +345,13 @@ export function score(evidence) {
     const pts = rep.ratio >= 50 ? 12 : rep.ratio >= 15 ? 9 : rep.ratio >= 5 ? 6 : 3;
     add('neighbours', 'asn-abuse', 'ASN 滥用密度偏高', pts, `每万个地址 ${rep.per10k} 个近期上榜，约为全网平均的 ${rep.ratio} 倍`);
   }
-  if (typeof asnInfo.botShare === 'number' && asnInfo.botShare > 0.5) {
-    add('neighbours', 'asn-bots', 'ASN 机器流量偏高', (asnInfo.botShare - 0.5) / 0.5 * 6, `Cloudflare Radar：机器流量 ${Math.round(asnInfo.botShare * 100)}%`);
-  }
+  // 人机流量: Cloudflare Radar's 28-day human vs bot share of the ASN's HTTP traffic. Eyeball networks sit
+  // around 10–30% bots; above 40% the network looks like servers and scrapers, and the deduction grows to 6 at 90%.
+  const botShare = typeof asnInfo.botShare === 'number' ? clamp(asnInfo.botShare, 0, 1) : null;
+  const humanShare = botShare === null ? null : typeof asnInfo.radar?.human === 'number' ? clamp(asnInfo.radar.human, 0, 1) : 1 - botShare;
+  const botE = botShare === null ? 0 : clamp((botShare - 0.4) / 0.5, 0, 1);
+  const botText = botShare === null ? '' : `Cloudflare Radar 近 28 天：人类 ${Math.round(humanShare * 100)}%，机器 ${Math.round(botShare * 100)}%`;
+  if (botE > 0) add('neighbours', 'asn-bots', 'ASN 机器流量偏高', 6 * botE, botText);
   if (asnInfo.rpki === 'invalid') add('neighbours', 'rpki', 'RPKI 校验无效', 3, '该前缀的路由宣告与 ROA 不符，可能是配置错误或劫持');
 
   // ---------- abuse ----------
@@ -490,6 +494,7 @@ export function score(evidence) {
   if (asnInfo.rpki === 'valid') plus('rpki', 'RPKI 有效', 0.5, '路由宣告有 ROA 背书，不像被劫持的地址');
   const greynoise = sources.find(source => source.id === 'greynoise');
   if (greynoise?.riot) plus('riot', '已知良性服务', 1, `GreyNoise RIOT：${greynoise.name || '常见商业服务'}`);
+  if (botShare !== null && botShare <= 0.2) plus('asn-human', '人类流量为主', 1, botText);
   if (live.turnstile === 'good') plus('turnstile', 'Turnstile 直接放行', 1, 'Cloudflare 没有弹出任何验证', true);
   if (recaptcha?.status === 'ok' && recaptcha.score >= 0.9) plus('recaptcha', 'reCAPTCHA 高分', 2, `Google 给出 ${recaptcha.score.toFixed(1)}`, true);
   const ipBonus = Math.min(BONUS_CAP, bonusItems.filter(item => !item.live).reduce((sum, item) => sum + item.pts, 0));
@@ -515,38 +520,141 @@ export function score(evidence) {
     dnsbl: { listed: dnsblListed.map(item => item.name), checked: dnsbl.filter(item => item.kind !== 'tor').length, level: !dnsbl.length ? 'none' : dnsblListed.length ? 'bad' : 'good' },
     neighbours: { ...(nb || {}), level: !nb ? 'none' : nb.whole.length || nb.count >= 10 ? 'bad' : nb.count || nb.tor ? 'warn' : 'good' },
     asnRep: { ...(rep || {}), level: !rep ? 'none' : rep.ratio >= 15 ? 'bad' : rep.ratio >= 2 ? 'warn' : 'good' },
+    bots: { bot: botShare === null ? null : r3(botShare), human: humanShare === null ? null : r3(humanShare), window: asnInfo.radar?.window || null, level: botShare === null ? 'none' : botShare >= 0.6 ? 'bad' : botShare >= 0.4 ? 'warn' : 'good' },
     asn: { consistency: asnConsistency, level: !asnConsistency ? 'none' : !asnConsistency.ok ? 'bad' : asnConsistency.warn ? 'warn' : 'good' },
     ports: { ports: shodan?.ports || [], tags: shodan?.tags || [], level: !shodan ? 'none' : shodan.tags?.some(tag => ['proxy', 'vpn', 'tor', 'compromised', 'malware'].includes(tag)) ? 'warn' : shodan.ports?.length ? 'info' : 'good' },
   };
 
-  // ---------- scenarios ----------
-  const isHosting = ipType === 'hosting';
-  const anonSome = anonAny > 0 || torHard;
-  const liveFlags = ['webrtc', 'dns', 'tcp', 'tz', 'ipv6'].filter(key => live[key] === 'bad' || live[key] === 'warn');
-  const uses = {};
-  const use = (id, level, why) => { uses[id] = { level, why }; };
-  if (country && AI_BLOCKED.has(country)) use('ai', 'bad', `${country} 不在主流 AI 服务的支持地区`);
-  else if (torHard || (risk ?? 0) >= 70) use('ai', 'bad', '风险分过高或 Tor 出口，容易被拒绝或封号');
-  else if ((isHosting && (anonSome || (risk ?? 0) >= 35)) || liveFlags.includes('tcp') || liveFlags.includes('webrtc')) use('ai', 'warn', isHosting ? '机房 + 代理标记，可能触发风控' : '连接特征暴露了代理');
-  else use('ai', 'good', '地区受支持，风险较低');
-  if (torHard || anonAny >= 0.5) use('stream', 'bad', '被识别为 VPN / 代理，流媒体大概率拒绝');
-  else if (isHosting || anonSome) use('stream', 'warn', isHosting ? '机房 IP，部分平台只给自制剧或拒绝' : '有来源标记代理');
-  else if (native === false || countries.length > 1) use('stream', 'warn', native === false ? '广播 IP，地区可能被判成注册地' : '各库定位不一致');
-  else use('stream', 'good', '原生、非机房，解锁概率较高');
-  const turnstileBad = live.turnstile === 'bad'; const recaptchaBad = live.recaptcha === 'bad';
-  if (torHard || (risk ?? 0) >= 75 || dnsblListed.length >= 2 || turnstileBad || recaptchaBad) use('captcha', 'bad', turnstileBad || recaptchaBad ? '实测人机验证未通过' : '高风险，验证码会频繁出现');
-  else if ((risk ?? 0) >= 40 || (isHosting && anonSome) || dnsblListed.length || live.turnstile === 'warn' || live.recaptcha === 'warn' || (nb && (nb.whole.length || nb.count >= 10))) use('captcha', 'warn', nb && (nb.whole.length || nb.count >= 10) ? '同网段邻居名声不好，可能被连带要求验证' : '偶尔会被要求验证');
-  else use('captcha', 'good', live.turnstile === 'good' || live.recaptcha === 'good' ? '实测直接通过' : '一般不会弹验证码');
-  if (torHard || (risk ?? 0) >= 70 || abuser.yes >= 2) use('account', 'bad', '注册 / 支付风控大概率拦截');
-  else if ((risk ?? 0) >= 35 || anonSome || isHosting || abuser.yes || liveFlags.length >= 2) use('account', 'warn', '可能需要额外验证');
-  else use('account', 'good', '注册与付款风险较低');
-  if (dnsblListed.length) use('mail', 'bad', '在邮件黑名单中，发信会被拒');
-  else if (ipType === 'residential' || ipType === 'mobile') use('mail', 'warn', '家宽 / 移动段通常不被允许直接发信');
-  else if (!hostname) use('mail', 'warn', '没有反向解析（PTR），发信会被降级');
-  else use('mail', 'good', '有 PTR 且未上黑名单');
-  if (torHard || isHosting || anonAny >= 0.5) use('social', 'bad', '机房或代理 IP，TikTok / 社媒容易限流');
-  else if (native === false || anonSome || liveFlags.length) use('social', 'warn', '非原生或连接特征异常，账号可能被风控');
-  else use('social', 'good', '适合社媒运营');
+  // ---------- scenarios: every use case gets its own 0–100 meter ----------
+  // Each starts at 100 and deducts only what that kind of website checks: ≥ 75 可以, 50–74 看情况, < 50 不建议.
+  // Hard gates (unsupported AI region, Tor exit) cap the meter whatever the rest says.
+  const typeShare = value => typeMix.filter(item => item.value === value).reduce((sum, item) => sum + item.share, 0);
+  const hostE = typeShare('hosting'); const businessE = typeShare('business');
+  const homeE = typeShare('residential'); const mobileE = typeShare('mobile');
+  const anonTop = anonFlags.vpn.E >= anonFlags.proxy.E ? anonFlags.vpn : anonFlags.proxy;
+  const geoSplitE = countries.length > 1 ? clamp((0.85 - countrySupport) / 0.35, 0, 1) : 0;
+  const broadcastE = native === false ? 1 - nativeShare : 0;
+  const leaseE = lease?.leased || lease?.possible ? clamp(lease.confidence / 0.7, 0, 1) : 0;
+  const sharedE = devices?.address >= 50 ? 1 : devices?.address >= 10 ? 0.5 : 0;
+  const nbE = !nb ? 0 : nb.whole.length ? 1 : nb.count >= 10 ? 0.7 : nb.count >= 3 ? 0.4 : nb.count ? 0.2 : 0;
+  const asnAbuseE = !rep ? 0 : rep.ratio >= 15 ? 1 : rep.ratio >= 5 ? 0.6 : rep.ratio >= 2 ? 0.3 : 0;
+  const abuseE = Math.max(abuser.E, attack.length ? 1 : 0);
+  const mailListed = dnsblListed.filter(item => item.kind === 'mail');
+  const abuseListed = dnsblListed.filter(item => item.kind === 'abuse');
+  const riskV = risk ?? 0;
+  const blockedGeo = countries.filter(item => AI_BLOCKED.has(item.value));
+  const ptrSource = sources.find(source => source.id === 'ptr');
+  const sfsRecent = Boolean(sfs?.lastseen && NOW() - Date.parse(sfs.lastseen) < 90 * 864e5);
+  const asnYoung = Boolean(asnInfo.regDate && NOW() - Date.parse(asnInfo.regDate) < 2 * 365 * 864e5);
+  const dnsVerdict = dns?.status === 'ok' ? dns.verdict : null;
+  const tcpVerdict = tcp?.status === 'ok' ? (tcp.relay ? 'relay' : tcp.osMismatch ? 'os' : null) : null;
+  const tsOutcome = turnstile?.status === 'ok' ? turnstile.outcome : null;
+  const rcScore = recaptcha?.status === 'ok' && typeof recaptcha.score === 'number' ? recaptcha.score : null;
+  const leakE = webrtc?.status === 'ok' && webrtc.leak ? (webrtc.leakCountryDiffers ? 1 : 0.75) : 0;
+  const captchaPassed = (tsOutcome !== null || rcScore !== null) && (tsOutcome === null || tsOutcome === 'silent') && (rcScore === null || rcScore >= 0.7);
+
+  /** Signals several scenarios share; each scenario passes its own weight. */
+  const signals = (hit, gate) => ({
+    anon: pts => hit('VPN / 代理标记', pts * anonAny, anonTop.yes ? voteText(anonTop) : ''),
+    hosting: pts => hit('机房 IP', pts * hostE, `IP 类型中机房占 ${Math.round(hostE * 100)}%`),
+    business: pts => hit('商业线路', pts * businessE, `IP 类型中商业宽带占 ${Math.round(businessE * 100)}%`),
+    broadcast: pts => hit('广播 IP', pts * broadcastE, `注册地 ${regCountry}，定位 ${country}`),
+    geoSplit: pts => hit('定位不一致', pts * geoSplitE, countries.map(item => `${item.value} ${Math.round(item.share * 100)}%`).join(' · ')),
+    lease: pts => hit('租赁地址段', pts * leaseE, lease?.reasons?.[0] || ''),
+    shared: pts => hit('多设备共用出口', pts * sharedE, devices ? `Proxycheck 估计近期约 ${devices.address} 台设备` : ''),
+    risk: per => hit('欺诈 / 风险分', per * riskV, `综合风险分 ${riskV}`),
+    abuse: pts => hit('滥用 / 威胁记录', pts * abuseE, [abuser.yes ? voteText(abuser) : '', attack.map(item => item.name).join('、')].filter(Boolean).join('；')),
+    neighbours: pts => hit('同网段邻居上榜', pts * nbE, nb ? (nb.whole.length ? `${nb.prefix} 整段在 ${nb.whole.join('、')}` : `${nb.prefix} 内 ${nb.count} 个地址上榜`) : ''),
+    asnAbuse: pts => hit('ASN 滥用密度高', pts * asnAbuseE, rep ? `约为全网平均的 ${rep.ratio} 倍` : ''),
+    bots: pts => hit('人机流量：机器占比高', pts * botE, botText),
+    webrtc: pts => hit('WebRTC 泄漏', pts * leakE, webrtc?.leakIPs?.join('、') || ''),
+    dns: (leak, cn, cross) => {
+      if (dnsVerdict === 'leak-cn') hit('DNS 解析来自中国大陆', cn, dns.summary);
+      else if (dnsVerdict === 'leak') hit('DNS 泄漏', leak, dns.summary);
+      else if (dnsVerdict === 'public') hit('DNS 跨区解析', cross, dns.summary);
+    },
+    ecs: pts => { if (dns?.status === 'ok' && dns.ecsLeak) hit('EDNS 子网暴露位置', pts, dns.ecsSummary); },
+    ipv6: pts => { if (live.ipv6 === 'bad') hit('IPv6 走了别的出口', pts, ipv6.summary); },
+    tcp: (relay, os) => {
+      if (tcpVerdict === 'relay') hit('TCP 指纹像代理转发', relay, tcp.summary);
+      else if (tcpVerdict === 'os') hit('TCP 系统指纹不一致', os, tcp.summary);
+    },
+    tz: pts => { if (live.tz === 'warn') hit('时区与 IP 不符', pts, `浏览器 ${tz.zone}，IP 所在 ${ipTimezone}`); },
+    lang: pts => { if (live.lang === 'warn') hit('语言与 IP 地区不符', pts, `浏览器 ${lang.languages.slice(0, 2).join(', ')}`); },
+    turnstile: (interactive, fail) => {
+      if (tsOutcome === 'interactive') hit('Turnstile 需要人工验证', interactive, turnstile.summary);
+      else if (tsOutcome === 'fail') hit('Turnstile 未通过', fail, turnstile.summary);
+    },
+    recaptcha: pts => { if (rcScore !== null) hit('reCAPTCHA 分数偏低', pts * clamp((0.7 - rcScore) / 0.6, 0, 1), `Google reCAPTCHA v3 = ${rcScore.toFixed(1)}`); },
+    tor: (pts, max, text) => { hit('Tor 出口', pts * tor.E, voteText(tor)); if (torHard) gate(max, text); },
+  });
+  const meter = (calm, build, note = '') => {
+    const items = []; const gates = [];
+    const hit = (label, pts, detail = '') => { if (pts >= 0.5) items.push({ label, pts: r1(pts), detail }); };
+    const gate = (max, text) => gates.push({ max, text });
+    build(hit, gate, signals(hit, gate));
+    items.sort((a, b) => b.pts - a.pts);
+    const cap = gates.sort((a, b) => a.max - b.max)[0] || null;
+    const value = Math.round(Math.min(cap ? cap.max : 100, clamp(100 - items.reduce((sum, item) => sum + item.pts, 0), 0, 100)));
+    const level = value >= 75 ? 'good' : value >= 50 ? 'warn' : 'bad';
+    const why = cap?.text || (items[0]?.pts >= 5 ? `主要扣分：${items.slice(0, 2).map(item => item.label).join('、')}` : calm);
+    return { score: value, level, why, gate: cap?.text || null, note, items };
+  };
+
+  const uses = {
+    // Netflix-style catalogues: anonymity and datacenter lists first, then which region the IP resolves to.
+    stream: meter('原生、非机房，解锁概率较高', (hit, gate, s) => {
+      s.anon(70); s.hosting(55); s.business(8); s.broadcast(20); s.geoSplit(25); s.lease(8); s.shared(10);
+      hit('隐私中继', 10 * anonFlags.relay.E, voteText(anonFlags.relay));
+      s.ipv6(25); s.dns(10, 10, 4); s.ecs(8); s.risk(0.1);
+      s.tor(60, 5, 'Tor 出口，流媒体基本都会拒绝');
+    }),
+    // AI services: supported region is a hard gate; anything that reveals a different real location weighs most.
+    ai: meter('地区受支持，风险较低', (hit, gate, s) => {
+      if (country && AI_BLOCKED.has(country)) gate(0, `${country} 不在主流 AI 服务的支持地区`);
+      else hit('部分数据库定位在不支持地区', 40 * blockedGeo.reduce((sum, item) => sum + item.share, 0), blockedGeo.map(item => `${item.value}：${item.by.join('、')}`).join('；'));
+      s.webrtc(35); s.dns(12, 25, 3); s.ecs(20); s.ipv6(15);
+      s.anon(25); s.hosting(15); s.risk(0.4); s.abuse(15);
+      s.tcp(12, 5); s.tz(8); s.lang(3); s.turnstile(10, 25); s.bots(8);
+      s.tor(60, 10, 'Tor 出口，AI 服务会拒绝或封号');
+    }),
+    // CAPTCHA frequency follows IP reputation; a measured pass outweighs the predictions.
+    captcha: meter(captchaPassed ? '实测直接通过' : '一般不会弹验证码', (hit, gate, s) => {
+      const k = captchaPassed ? 0.4 : 1;
+      s.anon(25 * k); s.hosting(20 * k); s.risk(0.35 * k); s.abuse(25 * k);
+      hit('黑名单收录', Math.min(20, 10 * abuseListed.length + 3 * mailListed.length) * k, dnsblListed.map(item => item.name).join('、'));
+      s.neighbours(20 * k); s.asnAbuse(12 * k); s.shared(10 * k);
+      s.bots(10 * k);
+      s.turnstile(25, 45); s.recaptcha(50);
+      s.tor(60, 10, 'Tor 出口几乎每次都要验证');
+    }, captchaPassed ? '实测通过：推测项按 40% 计' : ''),
+    // Sign-up and payment risk engines: fraud score, anonymity, spam history and browser / IP consistency.
+    account: meter('注册与付款风险较低', (hit, gate, s) => {
+      s.risk(0.6); s.anon(30); s.hosting(20); s.abuse(15);
+      if (sfs?.appears > 0) hit('垃圾注册记录', 12 + (sfsRecent ? 5 : 0), `StopForumSpam 记录 ${sfs.appears} 次${sfs.lastseen ? `，最近 ${sfs.lastseen.slice(0, 10)}` : ''}`);
+      s.broadcast(6); s.geoSplit(10); s.lease(5); s.shared(8); s.bots(8);
+      s.tz(12); s.lang(5); s.webrtc(20); s.dns(10, 15, 3); s.tcp(10, 5); s.ipv6(10);
+      s.tor(70, 5, 'Tor 出口，注册和支付基本都会被拦截');
+    }),
+    // Direct SMTP: mail blacklists, dynamic (home / mobile) ranges and PTR decide; a server IP is normal here.
+    mail: meter('有 PTR 且未上黑名单，适合直接发信', (hit, gate, s) => {
+      hit('邮件黑名单', Math.min(60, 25 * mailListed.length), mailListed.map(item => item.name).join('、'));
+      hit('滥用类黑名单', Math.min(30, 15 * abuseListed.length), abuseListed.map(item => item.name).join('、'));
+      hit(mobileE > homeE ? '移动网络地址段' : '家宽地址段', (55 * homeE + 60 * mobileE) * clamp(0.4 + homeCertainty, 0.6, 1), '收件方通常整段拒收家宽 / 移动段直接发来的邮件');
+      if (ptrSource && !hostname) hit('没有反向解析（PTR）', 25, '多数收件方要求发信 IP 有 PTR');
+      else if (hostname && (ptrSource?.type === 'residential' || ptrSource?.type === 'mobile')) hit('PTR 像动态地址', 15, hostname);
+      s.abuse(15); s.neighbours(15); s.asnAbuse(15); s.anon(15); s.lease(5);
+      if (asnYoung) hit('新注册 ASN', 5, `ASN 注册于 ${asnInfo.regDate.slice(0, 10)}`);
+      s.tor(60, 10, 'Tor 出口不能用来发信');
+    }),
+    // TikTok / Instagram: residential, native and a consistent device environment matter most.
+    social: meter(homeE + mobileE >= 0.5 ? '原生住宅 / 移动网络，适合社媒运营' : '没有明显风控信号', (hit, gate, s) => {
+      s.hosting(55); s.anon(40); s.broadcast(20); s.geoSplit(15); s.business(5); s.lease(8); s.shared(15);
+      s.risk(0.25); s.abuse(10); s.bots(8);
+      s.tz(15); s.lang(6); s.webrtc(20); s.dns(10, 15, 4); s.ipv6(15); s.tcp(12, 6);
+      s.tor(80, 5, 'Tor 出口，社媒账号会被直接限制');
+    }),
+  };
 
   // ---------- verdict ----------
   const grade = gradeOf(total);

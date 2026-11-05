@@ -1,11 +1,14 @@
 // Run: node --test tests/
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { score, gradeOf } from '../src/score.js';
-import { inferASN, detectLease } from '../src/asn.js';
-import { parseIP, isPublicIP, cidrContains, reverseName } from '../src/util.js';
-import { classifyDNS } from '../src/probes.js';
-import { classifyHostname } from '../src/sources.js';
+
+// Browser modules (config.js) read location.hostname at import time, so stub it before loading them.
+globalThis.location ??= { hostname: '' };
+const { score, gradeOf } = await import('../src/score.js');
+const { inferASN, detectLease } = await import('../src/asn.js');
+const { parseIP, isPublicIP, cidrContains, reverseName } = await import('../src/util.js');
+const { classifyDNS } = await import('../src/probes.js');
+const { classifyHostname } = await import('../src/sources.js');
 
 const f = (values = {}) => ({ vpn: null, proxy: null, tor: null, hosting: null, relay: null, abuser: null, crawler: null, mobile: null, bogon: null, ...values });
 const ok = data => ({ status: 'ok', data: { flags: f(), ...data } });
@@ -296,3 +299,98 @@ test('the clean-ISP bonus is forfeited by any anonymity evidence', () => {
   evidence.sources.proxycheck.data.flags.proxy = true; // residential proxy
   assert.equal(score(evidence).bonus.items.find(i => i.id === 'eyeball'), undefined);
 });
+
+// ---------- use-case meters ----------
+
+const USE_IDS = ['stream', 'ai', 'captcha', 'account', 'mail', 'social'];
+const levelOf = value => (value >= 75 ? 'good' : value >= 50 ? 'warn' : 'bad');
+
+test('every use case is a 0–100 meter whose level follows the 50 / 75 thresholds', () => {
+  for (const evidence of [clean(), clean({ self: true, probes: { tcp: { status: 'ok', relay: true, summary: 'relay' } } })]) {
+    const { uses } = score(evidence);
+    for (const id of USE_IDS) {
+      const use = uses[id];
+      assert.ok(use.score >= 0 && use.score <= 100, `${id} ${use.score}`);
+      assert.equal(use.level, levelOf(use.score), id);
+      assert.equal(Math.round(Math.max(0, 100 - use.items.reduce((sum, item) => sum + item.pts, 0))), use.score, `${id} is 100 − Σ items`);
+    }
+  }
+});
+
+test('each use case weighs the same evidence differently', () => {
+  // A clean VPS with a PTR: fine for mail, poor for streaming and social media.
+  const vps = clean({ asn: { asn: 20473, label: 'Vultr', inferred: { cls: 'hosting', label: '机房 / 云', hosting: 0.9, confidence: 0.9, mix: [{ value: 'hosting', share: 1 }] } } });
+  vps.sources.proxycheck = ok({ ...geo(), type: 'hosting', flags: f({ vpn: false, proxy: false, tor: false, hosting: true }), risk: 0 });
+  vps.sources.ipquery = ok({ ...geo(), flags: f({ vpn: false, proxy: false, tor: false, hosting: true }), risk: 0 });
+  vps.sources.ptr = ok({ geoVote: false, hostname: 'mail.example.net', type: null });
+  const server = score(vps).uses;
+  assert.equal(server.mail.score, 100);
+  assert.equal(server.stream.level, 'bad');
+  assert.equal(server.social.level, 'bad');
+  assert.equal(server.ai.level, 'good');
+
+  // A clean home line: the reverse.
+  const home = score(clean()).uses;
+  assert.equal(home.stream.score, 100);
+  assert.equal(home.social.score, 100);
+  assert.equal(home.mail.level, 'bad');
+  assert.ok(home.mail.items.some(item => item.label === '家宽地址段'));
+});
+
+test('a missing PTR costs mail points only once the PTR lookup has answered', () => {
+  const evidence = clean();
+  assert.ok(!score(evidence).uses.mail.items.some(item => item.label.includes('PTR')));
+  evidence.sources.ptr = ok({ geoVote: false, hostname: null, type: null });
+  assert.equal(score(evidence).uses.mail.items.find(item => item.label === '没有反向解析（PTR）').pts, 25);
+});
+
+test('hard gates cap a meter: unsupported AI region and Tor exits', () => {
+  const hk = clean();
+  for (const id of ['proxycheck', 'ipquery', 'ipinfo', 'ipwhois', 'ipsb', 'ipleak']) hk.sources[id].data.country = 'HK';
+  const ai = score(hk).uses.ai;
+  assert.equal(ai.score, 0);
+  assert.match(ai.gate, /HK/);
+
+  const tor = clean();
+  tor.sources.onionoo = ok({ geoVote: false, flags: f({ tor: true }), hard: { tor: true } });
+  const uses = score(tor).uses;
+  for (const id of USE_IDS) assert.ok(uses[id].score <= 10 && uses[id].gate, `${id} ${uses[id].score}`);
+});
+
+test('a measured CAPTCHA pass damps the predicted CAPTCHA deductions', () => {
+  const evidence = clean();
+  evidence.sources.proxycheck.data.flags.proxy = true;
+  const predicted = score(evidence).uses.captcha;
+  const measured = score({ ...evidence, self: true, probes: { turnstile: { status: 'ok', outcome: 'silent', summary: '' }, recaptcha: { status: 'ok', score: 0.9 } } }).uses.captcha;
+  const proxyPts = use => use.items.find(item => item.label === 'VPN / 代理标记').pts;
+  assert.equal(proxyPts(measured), r1(proxyPts(predicted) * 0.4));
+  assert.ok(measured.score > predicted.score);
+  assert.match(measured.note, /40%/);
+
+  const failed = score({ ...evidence, self: true, probes: { turnstile: { status: 'ok', outcome: 'fail', summary: '' } } }).uses.captcha;
+  assert.equal(failed.level, 'bad');
+});
+
+test('人机流量: a bot-heavy ASN costs reputation and scenario points, a human one earns a bonus', () => {
+  const withBots = bot => clean({ asn: { asn: 2516, botShare: bot, radar: { bot, human: 1 - bot, window: '28d' }, inferred: { cls: 'isp', label: '运营商宽带', hosting: 0.05 } } });
+
+  const heavy = score(withBots(0.85));
+  // (0.85 − 0.4) / 0.5 = 0.9 → 6 × 0.9 = 5.4
+  assert.equal(heavy.categories.find(c => c.id === 'neighbours').items.find(i => i.id === 'asn-bots').pts, 5.4);
+  assert.equal(heavy.checks.bots.level, 'bad');
+  assert.equal(heavy.checks.bots.human, 0.15);
+  for (const id of ['captcha', 'ai', 'account', 'social']) assert.ok(heavy.uses[id].items.some(item => item.label.startsWith('人机流量')), `${id} misses the bot item`);
+  assert.ok(!heavy.uses.mail.items.some(item => item.label.startsWith('人机流量')));
+
+  const human = score(withBots(0.15));
+  assert.equal(human.checks.bots.level, 'good');
+  assert.ok(human.bonus.items.some(i => i.id === 'asn-human'));
+  assert.ok(!human.categories.some(c => c.items.some(i => i.id === 'asn-bots')));
+
+  // No Radar data: nothing counted either way.
+  const none = score(clean());
+  assert.equal(none.checks.bots.level, 'none');
+  assert.equal(none.checks.bots.bot, null);
+});
+
+function r1(value) { return Math.round(value * 10) / 10; }

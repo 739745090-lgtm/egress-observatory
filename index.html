@@ -9,7 +9,7 @@
   <meta name="referrer" content="strict-origin-when-cross-origin">
   <title>IP 纯净度检测 · Egress</title>
   <link rel="icon" href="./favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="./styles.css?v=2.3">
+  <link rel="stylesheet" href="./styles.css?v=2.5">
   <script type="module" src="./src/main.js?v=cloud3"></script>
 </head>
 <body>
@@ -99,7 +99,7 @@
           <p><b>邻居</b>：同一 /24 里其他地址在 FireHOL、blocklist.de、GreenSnow、StopForumSpam、CyberCrime、DShield 中上榜的数量：1–2 个扣 3，3–9 个扣 6，10–29 个扣 10，30 个以上扣 14；整段被列入扣 15；同段有 Tor 中继扣 3。</p>
           <p><b>ASN 信誉</b>：把 ASN 宣告的全部 IPv4 与地址级威胁列表比对，算出每万个地址的上榜数，再除以全网平均：2 倍以上扣 3，5 倍 6，15 倍 9，50 倍 12；另计 Cloudflare Radar 机器流量与 RPKI 无效。</p>
           <h3>安全加分</h3>
-          <p>多库一致干净 +2 · 邻居干净 +2 · ASN 信誉良好（低于均值一半）+2 · 纯净运营商 / 移动网络最多 +3（按类型确定度与 ASN 是否为运营商缩放，有任何匿名或滥用证据则不给）· 原生 +0.5 · RPKI 有效 +0.5 · Turnstile 直接放行 +1 · reCAPTCHA ≥ 0.9 +2。</p>
+          <p>多库一致干净 +2 · 邻居干净 +2 · ASN 信誉良好（低于均值一半）+2 · 纯净运营商 / 移动网络最多 +3（按类型确定度与 ASN 是否为运营商缩放，有任何匿名或滥用证据则不给）· 原生 +0.5 · RPKI 有效 +0.5 · 人类流量为主（ASN 机器流量 ≤ 20%）+1 · Turnstile 直接放行 +1 · reCAPTCHA ≥ 0.9 +2。</p>
         </div>
         <div>
           <h3>匿名化与滥用</h3>
