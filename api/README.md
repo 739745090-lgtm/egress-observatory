@@ -28,6 +28,7 @@
 | `/v1/greynoise?ip=` | GET | `GREYNOISE_API_KEY`（可选） | 是否在全网扫描（noise）、恶意 / 良性分类、RIOT 已知良性服务 |
 | `/v1/crowdsec?ip=` | GET | `CROWDSEC_CTI_KEY`（可选） | CrowdSec 信誉、行为、代理 / VPN / Tor 分类、风险分 |
 | `/v1/virustotal?ip=` | GET | `VT_API_KEY`（可选） | 判定恶意 / 可疑的安全厂商数量 |
+| `/v1/seen?ip=&client=` | GET | D1 绑定 | 记录一次检测并返回共享人数估计：近 30 天从该 IP 本身出口检测过的不同浏览器数 `sharers`、查询方数 `lookers`、查询次数 `lookups`。查询方以随机盐加盐哈希（调用者 IP + 匿名浏览器标识）保存，不存原文；调用者 IP 等于目标 IP 时才计为共享者，每个 IP 每小时最多新增 5 个（检查与写入在同一条语句内完成）；超过 30 天的记录不再计入，并在之后任何一次 `/v1/seen` 请求时删除 |
 | `/v1/radar?asn=` | GET | `CF_RADAR_TOKEN`（可选） | Cloudflare Radar 近 28 天 ASN 人机流量占比，缓存 6 小时 |
 | `/v1/turnstile/verify` | POST | `TURNSTILE_SECRET_KEY` | `{ "token": "…" }` → `{ success, hostname, challengeTs, errorCodes }` |
 | `/v1/recaptcha/verify` | POST | `RECAPTCHA_SECRET_KEY` | `{ "token": "…" }` → `{ success, score, action, hostname, errorCodes }` |

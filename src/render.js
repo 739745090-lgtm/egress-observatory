@@ -2,7 +2,7 @@
 import { esc, countryName, maskIP, maskText, formatOffset, zoneOffset } from './util.js?v=4.1';
 import { SOURCES } from './sources.js?v=3.3';
 import { DNSBLS, CIDR_LISTS } from './blocklists.js';
-import { CATEGORIES, TYPE_LABEL } from './score.js?v=4.7';
+import { CATEGORIES, TYPE_LABEL } from './score.js?v=4.8';
 import { captchaConfig } from './captcha.js';
 import { PAGE_PROVIDERS } from './page-providers.js?v=1';
 
@@ -309,6 +309,9 @@ export function renderChecks(run, result) {
     { label: 'ASN 信誉', level: c.asnRep.level === 'none' ? (run.asnProfile && !run.asnProfile.routes ? 'none' : 'pending') : c.asnRep.level, value: c.asnRep.ratio === undefined ? '—' : c.asnRep.ratio >= 15 ? '较差' : c.asnRep.ratio >= 2 ? '一般' : c.asnRep.ratio <= 0.2 ? '优异' : c.asnRep.ratio < 0.5 ? '良好' : '正常', sub: c.asnRep.ratio === undefined ? '' : `滥用密度 ${c.asnRep.ratio} 倍均值`, pts: itemPts(result, 'asn-abuse') + itemPts(result, 'rpki'), title: c.asnRep.ratio === undefined ? '' : `整个 ASN 每万个地址有 ${c.asnRep.per10k} 个近期上榜，全网平均 ${c.asnRep.baseline}` },
     { label: '开放端口', level: loading(c.ports.level), value: c.ports.ports.length ? esc(c.ports.ports.slice(0, 4).join(', ')) + (c.ports.ports.length > 4 ? '…' : '') : c.ports.level === 'none' ? '—' : '未发现', sub: c.ports.tags.length ? esc(c.ports.tags.join(' ')) : '' },
     botTile(run, result),
+    { label: '共享人数估计', level: loading(c.sharers.level), value: c.sharers.count === null ? '—' : c.sharers.count === 1 ? '独享 IP' : c.sharers.count ? `约 ${c.sharers.count} 人` : '暂无记录',
+      sub: c.sharers.count ? `${c.sharers.count === 1 ? '仅见 1 人' : c.sharers.tier} · 近 ${c.sharers.windowDays} 天` : '', pts: itemPts(result, 'sharers'),
+      title: c.sharers.count === null ? '本站的查询记录暂不可用，或服务端拿不到查询者地址' : `近 ${c.sharers.windowDays} 天里，从这个 IP 本身出口做检测的不同浏览器约 ${c.sharers.count} 个；共被 ${c.sharers.lookers} 个查询方查过 ${c.sharers.lookups} 次。1–3 人加 2 分，4–10 人正常，超过 10 人每多 1 人扣 0.5 分，最多扣 10 分。只保存加盐哈希，不保存查询者 IP。` },
   ];
   $('checks').innerHTML = tiles.map(tile).join('');
 }

@@ -11,8 +11,8 @@ import { DNSBLS, checkDNSBL, CIDR_LISTS, checkCIDRList, asnAbuseDensity } from '
 import { fetchASN, inferASN, detectLease } from './asn.js?v=4.3';
 import { detectEgress, summarizeEgress, probeWebRTC, probeDNS, classifyDNS, probeTCP, probeEnvironment, probeIPv6, classifyIPv6, traceProbe } from './probes.js';
 import { runTurnstile, runRecaptcha } from './captcha.js?v=4.2';
-import { score } from './score.js?v=4.7';
-import * as view from './render.js?v=4.20';
+import { score } from './score.js?v=4.8';
+import * as view from './render.js?v=4.21';
 
 const $ = id => document.getElementById(id);
 $('types').addEventListener('click',event=>{if(event.target.closest('[data-lookup-details]'))$('lookup-details').open=true;});
@@ -110,7 +110,7 @@ function buildEvidence(run) {
   }
   return {
     ip: run.ip, v: run.v, self: run.self, sources, dnsbl: run.dnsbl, lists: run.lists, extraVotes,
-    asn: run.asnProfile || null, asnRep: run.asnRep || null, neighbours: neighbourSummary(run),
+    asn: run.asnProfile || null, asnRep: run.asnRep || null, neighbours: neighbourSummary(run), seen: run.seen || null,
     probes: run.self ? {
       webrtc: run.probes.webrtc, tcp: run.probes.tcp, tz: run.probes.env?.tz, lang: run.probes.env?.lang,
       egress: app.egress, turnstile: run.probes.turnstile, recaptcha: run.probes.recaptcha,
@@ -167,6 +167,13 @@ function scheduleRender() {
 }
 
 // ---------- a single check ----------
+
+// An anonymous random id for this browser, so several people behind one exit IP count separately.
+function clientId() {
+  let id = localStorage.getItem('egress-client');
+  if (!/^[a-f0-9-]{32,40}$/.test(id || '')) { id = crypto.randomUUID(); try { localStorage.setItem('egress-client', id); } catch { /* Private mode: a fresh id each time. */ } }
+  return id;
+}
 
 // The last six addresses checked in this browser, newest first. Kept only in localStorage.
 const HISTORY = 'egress-history';
@@ -408,6 +415,11 @@ async function startRun(input, fetchPages = true) {
   run.lists.forEach((item, index) => {
     checkCIDRList(CIDR_LISTS[index], parsed.ip, signal).then(result => { if (alive()) { run.lists[index] = { ...item, ...result }; scheduleRender(); } });
   });
+
+  // Count this check: how many people have gone out through this IP (see /v1/seen in the API worker).
+  healthReady.then(health => health?.seen ? getJSON(`${API_BASE}/v1/seen?ip=${encodeURIComponent(parsed.ip)}&client=${clientId()}`, { signal, timeout: 12000 }) : null)
+    .then(result => { if (alive() && result?.ok && result.data?.status === 'success' && sameIP(result.data.ip, parsed.ip)) { run.seen = result.data; scheduleRender(); } })
+    .catch(() => {});
 
   if (self) runProbes(run, signal, alive);
 }

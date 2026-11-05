@@ -239,6 +239,12 @@ export function score(evidence) {
   if (devices?.address >= 10) {
     add('anon', 'shared', '多设备共用出口', devices.address >= 50 ? 5 : 3, `Proxycheck 估计该地址近期约 ${devices.address} 台设备`);
   }
+  // 共享人数估计: distinct browsers that checked this IP from this IP itself in the last 30 days (Egress's own log).
+  // 1–3 earns a bonus below, 4–10 is normal, from 11 on each extra person costs 0.5, up to 10.
+  const seen = evidence.seen?.callerKnown ? evidence.seen : null;
+  const sharers = seen?.sharers || 0;
+  const sharersText = `近 ${seen?.windowDays || 30} 天约 ${sharers} 个不同浏览器从这个 IP 出口做过检测`;
+  if (sharers > 10) add('anon', 'sharers', '共享人数多', Math.min(10, (sharers - 10) * 0.5), sharersText);
 
   // ---------- network type ----------
   const hostingVotes = flagVotes(sources, 'hosting').concat(extraVotes.hosting || []);
@@ -502,6 +508,7 @@ export function score(evidence) {
   const greynoise = sources.find(source => source.id === 'greynoise');
   if (greynoise?.riot) plus('riot', '已知良性服务', 1, `GreyNoise RIOT：${greynoise.name || '常见商业服务'}`);
   if (botShare !== null && botShare <= 0.2) plus('asn-human', '人类流量为主', 1, botText);
+  if (sharers >= 1 && sharers <= 3) plus('sharers', sharers === 1 ? '独享 IP' : '共享人数少', 2, sharersText);
   if (live.turnstile === 'good') plus('turnstile', 'Turnstile 直接放行', 1, 'Cloudflare 没有弹出任何验证', true);
   if (recaptcha?.status === 'ok' && recaptcha.score >= 0.9) plus('recaptcha', 'reCAPTCHA 高分', 2, `Google 给出 ${recaptcha.score.toFixed(1)}`, true);
   const ipBonus = Math.min(BONUS_CAP, bonusItems.filter(item => !item.live).reduce((sum, item) => sum + item.pts, 0));
@@ -529,6 +536,7 @@ export function score(evidence) {
     asnRep: { ...(rep || {}), level: !rep ? 'none' : rep.ratio >= 15 ? 'bad' : rep.ratio >= 2 ? 'warn' : 'good' },
     bots: { bot: botShare === null ? null : r3(botShare), human: humanShare === null ? null : r3(humanShare), window: asnInfo.radar?.window || null, level: botShare === null ? 'none' : botShare >= 0.6 ? 'bad' : botShare >= 0.4 ? 'warn' : 'good' },
     asn: { consistency: asnConsistency, level: !asnConsistency ? 'none' : !asnConsistency.ok ? 'bad' : asnConsistency.warn ? 'warn' : 'good' },
+    sharers: { count: seen ? sharers : null, tier: !seen || !sharers ? null : sharers === 1 ? '独享 IP' : sharers <= 3 ? '少量共享' : sharers <= 10 ? '正常' : '多人共享', lookers: seen?.lookers ?? null, lookups: seen?.lookups ?? null, windowDays: seen?.windowDays || 30, level: !seen || !sharers ? 'none' : sharers <= 3 ? 'good' : sharers <= 10 ? 'info' : sharers <= 20 ? 'warn' : 'bad' },
     ports: { ports: shodan?.ports || [], tags: shodan?.tags || [], level: !shodan ? 'none' : shodan.tags?.some(tag => ['proxy', 'vpn', 'tor', 'compromised', 'malware'].includes(tag)) ? 'warn' : shodan.ports?.length ? 'info' : 'good' },
   };
 

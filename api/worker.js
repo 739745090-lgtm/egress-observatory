@@ -801,6 +801,62 @@ async function pageLookup(provider, ip, url, origin, ctx) {
   return json({ ...result.body, cacheHit: false }, 200, origin, { 'X-Data-Cache': 'MISS' });
 }
 
+// ---------- who checks each address ----------
+// For every checked IP: how many times each querier asked. A querier is a salted hash of the caller's address and an
+// anonymous per-browser id, so no address or id is stored as is; the salt is random and lives only in the database.
+// A check counts towards the sharer estimate only when the caller's own address is the checked IP, i.e. that person
+// is actually going out through it. New sharers per address are throttled so nobody can inflate a count quickly.
+const SEEN_WINDOW_MS = 30 * 864e5;
+const NEW_SHARERS_PER_HOUR = 5;
+let seenSchema = null;
+
+function seenReady() {
+  seenSchema ??= db.batch([
+    db.prepare('CREATE TABLE IF NOT EXISTS egress_salt (id INTEGER PRIMARY KEY CHECK (id = 1), salt TEXT NOT NULL)'),
+    db.prepare('CREATE TABLE IF NOT EXISTS egress_seen (target TEXT NOT NULL, querier TEXT NOT NULL, self INTEGER NOT NULL, count INTEGER NOT NULL, first INTEGER NOT NULL, last INTEGER NOT NULL, PRIMARY KEY (target, querier))'),
+    db.prepare('CREATE INDEX IF NOT EXISTS egress_seen_last ON egress_seen (last)'),
+    db.prepare('INSERT OR IGNORE INTO egress_salt (id, salt) VALUES (1, ?)').bind(crypto.randomUUID() + crypto.randomUUID()),
+  ]).then(() => db.prepare('SELECT salt FROM egress_salt WHERE id = 1').first('salt')).catch(error => { seenSchema = null; throw error; });
+  return seenSchema;
+}
+
+async function digest(text) {
+  const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)));
+  return [...bytes.slice(0, 16)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+async function seen(request, url, origin) {
+  if (!db) return failure(503, 'not-configured', '服务端未绑定数据库。', origin);
+  const names = [...url.searchParams.keys()].sort().join(',');
+  if (names !== 'client,ip') return failure(400, 'invalid-parameters', '只接受 ip 与 client 参数。', origin);
+  const ip = publicIP(url.searchParams.get('ip'));
+  const client = url.searchParams.get('client') || '';
+  if (!ip) return failure(400, 'invalid-public-ip', '请输入公网 IPv4 或 IPv6。', origin);
+  if (!/^[a-f0-9-]{32,40}$/.test(client)) return failure(400, 'invalid-client', '浏览器标识无效。', origin);
+  const caller = trustedCaller(request);
+  const self = caller === ip ? 1 : 0;
+  const now = Date.now();
+  try {
+    const salt = await seenReady();
+    const querier = await digest(`${salt}|${caller || 'unknown'}|${client}`);
+    const since = now - SEEN_WINDOW_MS;
+    // One statement checks the hourly cap and writes, so concurrent requests cannot slip past the cap together.
+    // A known querier or a lookup of someone else's address is always recorded; a new sharer only under the cap.
+    await db.prepare(`INSERT INTO egress_seen (target, querier, self, count, first, last)
+      SELECT ?1, ?2, ?3, 1, ?4, ?4
+      WHERE ?3 = 0 OR EXISTS (SELECT 1 FROM egress_seen WHERE target = ?1 AND querier = ?2)
+        OR (SELECT COUNT(*) FROM egress_seen WHERE target = ?1 AND self = 1 AND first > ?5) < ?6
+      ON CONFLICT (target, querier) DO UPDATE SET count = count + 1, last = excluded.last, self = MAX(self, excluded.self)`)
+      .bind(ip, querier, self, now, now - 3600e3, NEW_SHARERS_PER_HOUR).run();
+    // Every check also deletes rows older than the window (indexed on last), so retention does not depend on chance.
+    await db.prepare('DELETE FROM egress_seen WHERE last < ?').bind(since).run();
+    const row = await db.prepare('SELECT SUM(self) AS sharers, COUNT(*) AS lookers, SUM(count) AS lookups FROM egress_seen WHERE target = ? AND last > ?').bind(ip, since).first();
+    return json({ status: 'success', ip, self: Boolean(self), callerKnown: Boolean(caller), sharers: row?.sharers || 0, lookers: row?.lookers || 0, lookups: row?.lookups || 0, windowDays: 30, observedAt: new Date(now).toISOString() }, 200, origin);
+  } catch {
+    return failure(503, 'seen-unavailable', '查询记录暂时不可用。', origin);
+  }
+}
+
 // ---------- router ----------
 
 async function handle(request, env, ctx) {
@@ -817,7 +873,7 @@ async function handle(request, env, ctx) {
   const lookup = LOOKUPS[url.pathname];
   const pageName = url.pathname.startsWith('/v1/page/') ? url.pathname.slice('/v1/page/'.length) : '';
   const pageProvider = PAGE_PROVIDERS.has(pageName) ? pageName : null;
-  const known = url.pathname === '/health' || url.pathname === '/v1/radar' || Boolean(lookup) || Boolean(verifyKind) || Boolean(pageProvider);
+  const known = url.pathname === '/health' || url.pathname === '/v1/radar' || url.pathname === '/v1/seen' || Boolean(lookup) || Boolean(verifyKind) || Boolean(pageProvider);
   if (!known) return failure(404, 'not-found', '接口不存在。', origin);
   const method = verifyKind ? 'POST' : 'GET';
 
@@ -830,7 +886,7 @@ async function handle(request, env, ctx) {
   if (request.method !== method) return failure(405, 'method-not-allowed', `仅支持 ${method}。`, origin);
 
   if (url.pathname === '/health') {
-    return json({ status: 'ok', service: 'egress-observatory-api', apiVersion: API_VERSION, routes, providers: routes.filter(route => LOOKUPS[`/v1/${route}`]), cacheTTLSeconds: CACHE_SECONDS, staleSeconds: STALE_SECONDS, cacheStore: db ? 'd1' : typeof caches !== 'undefined' ? 'cache-api' : 'none', callerKnown: Boolean(trustedCaller(request)), rateLimitPerMinute: RATE_LIMIT, rateLimitStore: db ? 'd1' : 'unavailable', pageAdmission: 'single-use-ticket' }, 200, origin);
+    return json({ status: 'ok', service: 'egress-observatory-api', apiVersion: API_VERSION, routes, providers: routes.filter(route => LOOKUPS[`/v1/${route}`]), cacheTTLSeconds: CACHE_SECONDS, staleSeconds: STALE_SECONDS, cacheStore: db ? 'd1' : typeof caches !== 'undefined' ? 'cache-api' : 'none', seen: Boolean(db), callerKnown: Boolean(trustedCaller(request)), rateLimitPerMinute: RATE_LIMIT, rateLimitStore: db ? 'd1' : 'unavailable', pageAdmission: 'single-use-ticket' }, 200, origin);
   }
 
   const slot = await takeRateSlot(request);
@@ -841,6 +897,7 @@ async function handle(request, env, ctx) {
     if (!routes.includes(`${verifyKind}-verify`)) return failure(503, 'not-configured', '服务端未配置该验证密钥。', origin);
     return siteverify(verifyKind, request, env, origin);
   }
+  if (url.pathname === '/v1/seen') return seen(request, url, origin);
   if (url.pathname === '/v1/radar') {
     if (!routes.includes('radar')) return failure(503, 'not-configured', '服务端未配置 Radar token。', origin);
     return radar(url, env, origin, ctx);
