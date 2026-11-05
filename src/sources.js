@@ -67,6 +67,17 @@ const worker = (route) => async (ip, ctx) => {
 };
 
 export const SOURCES = [
+  {
+    id: 'netcoffee', name: 'Net.Coffee', group: 'intel', site: ip => `https://ip.net.coffee/ip/${ip}`,
+    async run(ip, ctx) {
+      const {data} = await json(`https://ip.net.coffee/api/ip/lookup/${encodeURIComponent(ip)}`, ctx);
+      if (!data.ip || !sameIP(data.ip, ip)) fail('Net.Coffee 返回目标不匹配');
+      const companyType = new Map(Object.entries({hosting:'hosting', isp:'residential', business:'business', education:'education', government:'government', mobile:'mobile'})).get(data.company_type) || null;
+      const usageType = data.is_datacenter === true ? 'hosting' : data.is_mobile === true ? 'mobile' : data.isResidential === true ? 'residential' : null;
+      return {companyType, usageType, flags:flags(), country:countryCode(data.countryCode), city:text(data.city), geoVote:false,
+        sourceNote:'Net.Coffee 查询结果；上游类型库未具名，独立展示。'};
+    },
+  },
   // ---------- IP intelligence & geolocation ----------
   {
     id: 'proxycheck', name: 'Proxycheck', group: 'intel', site: ip => `https://proxycheck.io/threats/${ip}`,

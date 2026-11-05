@@ -1,3 +1,4 @@
+import { setupImport, supplementTypes } from './ipsuper.js';
 /** Orchestration: detect the egress, fan out every check, rescore as results arrive. */
 import { API_BASE } from '../config.js';
 import { getJSON, parseIP, isPublicIP, sameIP, maskIP } from './util.js';
@@ -166,6 +167,7 @@ async function startRun(input) {
   if (self) url.searchParams.delete('ip'); else url.searchParams.set('ip', parsed.ip);
   history.replaceState(null, '', url);
   view.crossLinks(parsed.ip);
+  $('ipsuper-query').href = 'https://ipsuper.com/?ip=' + encodeURIComponent(parsed.ip);
 
   const ctx = { signal, healthReady: app.healthPromise, sourceReady: new Map() };
   const active = SOURCES.filter(source => !source.selfOnly || self);
@@ -196,7 +198,7 @@ async function startRun(input) {
     ctx.sourceReady.set(source.id, sourceTask);
     tasks.push(sourceTask.then(result => {
       if (!alive()) return;
-      run.sources[source.id] = result;
+      run.sources[source.id] = supplementTypes(result, importedTypes(parsed.ip, source.id));
       if (['ripeprefix', 'ipguide'].includes(source.id) || run.sources.ripeprefix?.status !== 'pending') maybeASN();
       scheduleRender();
     }));
@@ -326,6 +328,7 @@ $('self-check').addEventListener('click', () => {
   refreshEgress({ autoStart: true });
 });
 
+const importedTypes = setupImport();
 const requested = new URLSearchParams(location.search).get('ip');
 view.initTooltips();
 view.applyMask(app.masked);

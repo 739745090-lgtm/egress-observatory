@@ -353,8 +353,8 @@ export function renderBreakdown(run, result) {
 
 // ---------- multi-source IP type matrix ----------
 
-const TYPE_SOURCES = ['ipinfo', 'ip2location', 'ipregistry', 'ipapi', 'ipapimirror', 'ipdata', 'abuseipdb', 'dbip', 'proxycheck', 'ipqs', 'ipapiis', 'iplocate', 'geoiplookup', 'iphub', 'ipquery', 'blackbox'];
-const GIVES_COMPANY = new Set(['ipinfo', 'ip2location', 'ipregistry', 'ipdata', 'ipapiis', 'iplocate']);
+const TYPE_SOURCES = ['ipinfo', 'ip2location', 'ipregistry', 'ipapi', 'ipapimirror', 'ipdata', 'abuseipdb', 'dbip', 'proxycheck', 'ipqs', 'ipapiis', 'iplocate', 'geoiplookup', 'iphub', 'ipquery', 'blackbox', 'netcoffee'];
+const GIVES_COMPANY = new Set(['ipinfo', 'ip2location', 'ipregistry', 'ipdata', 'ipapiis', 'iplocate', 'netcoffee']);
 const UT_LABEL = { residential: '家宽', mobile: '移动', business: '商业', hosting: '机房', education: '教育', government: '政府' };
 const UT_TIP = {
   residential: '运营商给家庭 / 个人用户的接入地址', mobile: '移动网络（多为运营商 NAT 共享出口）', business: '企业专线或商业宽带',
@@ -365,10 +365,10 @@ function typeCell(record, field, id) {
   if (!record || record.status === 'pending') return `<span class="ut ut-pending">${icon('pending')}</span>`;
   if (record.status === 'skip') return '<span class="ut ut-off" tabindex="0" data-tip="需要在后端配置该数据库的 API key">未配置</span>';
   if (record.status !== 'ok') return `<span class="ut ut-off" tabindex="0" data-tip="${esc(record.error || '请求失败')}">失败</span>`;
-  if (field === 'companyType' && !GIVES_COMPANY.has(id)) return '<span class="muted">—</span>';
+  if (field === 'companyType' && !GIVES_COMPANY.has(id) && !record.data.companyType) return '<span class="muted">—</span>';
   const value = record.data[field];
   if (!value) return `<span class="ut ut-unknown" tabindex="0" data-tip="${esc(field === 'usageType' ? '这个来源没有给出使用类型（免费接口或套餐不含该字段）' : '这个来源没有给出公司类型')}">未知</span>`;
-  return `<span class="ut ut-${esc(value)}" tabindex="0" data-tip="${esc(`${SOURCES.find(source => source.id === id)?.name}：${UT_LABEL[value]}\n${UT_TIP[value] || ''}`)}">${esc(UT_LABEL[value] || value)}</span>`;
+  return `<span class="ut ut-${esc(value)}" tabindex="0" data-tip="${esc(`${SOURCES.find(source => source.id === id)?.name}：${UT_LABEL[value]}\n${UT_TIP[value] || ''}`)}">${esc(UT_LABEL[value] || value)}${record.data.importedFields?.includes(field) ? ' · IPSuper' : ''}</span>`;
 }
 
 export function renderTypes(run) {
