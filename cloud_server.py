@@ -1,5 +1,9 @@
 """Public, fixed-target lookup API used by the GitHub Pages frontend."""
 import ipaddress
+import os
+import json
+import urllib.request
+import urllib.parse
 import threading
 import time
 from collections import OrderedDict
@@ -31,7 +35,7 @@ def health():
 
 @app.route("/lookup/<provider>", methods=["POST", "OPTIONS"])
 def report(provider):
-    if provider not in {"ipinfo", "ipsuper"}:
+    if provider not in {"ipinfo", "ipsuper", "getipintel"}:
         return {"error": "未知来源"}, 404
     if request.headers.get("Origin") != ORIGIN:
         return {"error": "来源未获允许"}, 403
@@ -53,7 +57,20 @@ def report(provider):
         cached = CACHE.get(key)
         if cached and cached[0] > time.monotonic():
             return jsonify(cached[1])
-        result = lookup(ip, provider)
+        if provider == 'getipintel':
+            contact = os.environ.get('GETIPINTEL_CONTACT')
+            if not contact: return {'error':'联系邮箱未配置'}, 503
+            params = urllib.parse.urlencode({'ip':ip,'contact':contact,'format':'json','flags':'m'})
+            req = urllib.request.Request('https://check.getipintel.net/check.php?'+params,headers={'User-Agent':'Egress-Observatory/1.0 (+https://github.com/BlackSlience-Reaper/egress-observatory)'})
+            with urllib.request.urlopen(req,timeout=12) as response:
+                upstream = json.load(response)
+            if upstream.get('status') != 'success' or ipaddress.ip_address(upstream.get('queryIP','')) != addr:
+                return {'error':'GetIPIntel 上游拒绝查询：'+str(upstream.get('result','无结果'))[:10]}, 502
+            prob = float(upstream['result'])
+            if not 0 <= prob <= 1: raise ValueError()
+            result = {'ip':ip,'probability':prob,'risk':round(prob*100)}
+        else:
+            result = lookup(ip, provider)
         if ipaddress.ip_address(result["ip"]) != addr: raise ValueError()
         CACHE[key] = (time.monotonic() + 600, result)
         CACHE.move_to_end(key)
