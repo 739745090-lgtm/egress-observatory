@@ -1,15 +1,15 @@
 import { readIPinfoPage, mergeIPinfoPage } from './ipinfo-page.js?v=2.6';
-import { setupImport, supplementTypes } from './ipsuper.js?v=2.4';
+import { setupImport, supplementTypes, readReport } from './ipsuper.js?v=3.1';
 /** Orchestration: detect the egress, fan out every check, rescore as results arrive. */
 import { API_BASE } from '../config.js';
 import { getJSON, parseIP, isPublicIP, sameIP, maskIP } from './util.js';
-import { SOURCES, runSource } from './sources.js?v=2.4';
+import { SOURCES, runSource } from './sources.js?v=3.2';
 import { DNSBLS, checkDNSBL, CIDR_LISTS, checkCIDRList, asnAbuseDensity } from './blocklists.js';
 import { fetchASN, inferASN, detectLease } from './asn.js';
 import { detectEgress, summarizeEgress, probeWebRTC, probeDNS, classifyDNS, probeTCP, probeEnvironment, probeIPv6, classifyIPv6, traceProbe } from './probes.js';
 import { runTurnstile, runRecaptcha } from './captcha.js';
 import { score } from './score.js';
-import * as view from './render.js?v=2.6';
+import * as view from './render.js?v=3.2';
 
 const $ = id => document.getElementById(id);
 const app = {
@@ -150,7 +150,7 @@ function scheduleRender() {
 
 // ---------- a single check ----------
 
-async function startRun(input) {
+async function startRun(input, fetchPages = false) {
   const parsed = parseIP(input);
   if (!parsed || !isPublicIP(parsed.ip)) { $('status').textContent = '请输入有效的公网 IPv4 或 IPv6 地址。'; return; }
   app.run?.controller.abort();
@@ -195,14 +195,41 @@ async function startRun(input) {
     });
   };
 
+  let webTypes = importedTypes;
+  const records = new Map();
+  function refreshTypes() {
+    const abuse = records.get('abuseipdb')?.data;
+    for (const [id, record] of records) {
+      let data = id === 'ipinfo' ? mergeIPinfoPage(record, run.ipinfoPage) : record;
+      if (id === 'ipinfo' && !data.data?.usageType && abuse?.usageType) {
+        const d = {...data.data, flags:data.data?.flags || {}, usageType:abuse.usageType, type:data.data?.type || abuse.usageType, usageVia:'AbuseIPDB'};
+        data = {...data,status:'ok',directStatus:data.status,error:null,data:d};
+      }
+      run.sources[id] = supplementTypes(data, webTypes(parsed.ip, id));
+    }
+  }
+  const pageStatus = $('auto-page-status');
+  pageStatus.textContent = '';
+  if (fetchPages) {
+    pageStatus.textContent = '正在读取 IPSuper 网页…';
+    fetch('http://127.0.0.1:4188/lookup/ipsuper', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ip:parsed.ip}),signal:AbortSignal.any([signal,AbortSignal.timeout(80000)])})
+      .then(async response => {
+        const report = await response.json();
+        if (!response.ok) throw Error(report.error || '网页查询失败');
+        if (!alive()) return;
+        webTypes = readReport(report, parsed.ip);
+        refreshTypes(); scheduleRender();
+        pageStatus.textContent = 'IPSuper 网页已返回，已按数据库补全可用字段。';
+      }).catch(error => { if (alive()) pageStatus.textContent = error instanceof TypeError ? '本机网页读取服务不可达，请打开项目的「启动网站.cmd」。' : error.message; });
+  }
   const tasks = [];
   for (const source of active) {
     const sourceTask = runSource(source, parsed.ip, ctx);
     ctx.sourceReady.set(source.id, sourceTask);
     tasks.push(sourceTask.then(result => {
       if (!alive()) return;
-      const direct = source.id === 'ipinfo' ? mergeIPinfoPage(result, run.ipinfoPage) : result;
-      run.sources[source.id] = supplementTypes(direct, importedTypes(parsed.ip, source.id));
+      records.set(source.id, result);
+      refreshTypes();
       if (['ripeprefix', 'ipguide'].includes(source.id) || run.sources.ripeprefix?.status !== 'pending') maybeASN();
       scheduleRender();
     }));
@@ -275,7 +302,7 @@ async function share() {
   setTimeout(() => { delete button.dataset.done; }, 1800);
 }
 
-$('query').addEventListener('submit', event => { event.preventDefault(); startRun($('ip-input').value); });
+$('query').addEventListener('submit', event => { event.preventDefault(); startRun($('ip-input').value, true); });
 $('ip-input').addEventListener('input', () => $('ip-input').classList.remove('is-masked'));
 $('mask-toggle').addEventListener('click', () => { app.masked = !app.masked; localStorage.setItem('egress-mask', app.masked ? '1' : '0'); view.applyMask(app.masked); });
 $('share').addEventListener('click', share);

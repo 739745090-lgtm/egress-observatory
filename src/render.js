@@ -1,6 +1,6 @@
 /** DOM rendering. All external text goes through esc(). */
 import { esc, countryName, maskIP, formatOffset, zoneOffset } from './util.js';
-import { SOURCES } from './sources.js?v=2.4';
+import { SOURCES } from './sources.js?v=3.2';
 import { DNSBLS, CIDR_LISTS } from './blocklists.js';
 import { CATEGORIES, TYPE_LABEL } from './score.js';
 import { captchaConfig } from './captcha.js';
@@ -353,7 +353,7 @@ export function renderBreakdown(run, result) {
 
 // ---------- multi-source IP type matrix ----------
 
-const TYPE_SOURCES = ['ipinfo', 'ip2location', 'ipregistry', 'ipapi', 'ipapimirror', 'ipdata', 'abuseipdb', 'dbip', 'proxycheck', 'ipqs', 'ipapiis', 'iplocate', 'geoiplookup', 'iphub', 'ipquery', 'blackbox', 'netcoffee'];
+const TYPE_SOURCES = ['ipinfo', 'ip2location', 'ipregistry', 'ipapi', 'ipapimirror', 'ipdata', 'abuseipdb', 'dbip', 'proxycheck', 'ipqs', 'ipapiis', 'iplocate', 'geoiplookup', 'iphub', 'ipquery', 'blackbox'];
 const GIVES_COMPANY = new Set(['ipinfo', 'ip2location', 'ipregistry', 'ipdata', 'ipapiis', 'iplocate', 'netcoffee']);
 const UT_LABEL = { residential: '家宽', mobile: '移动', business: '商业', hosting: '机房', education: '教育', government: '政府' };
 const UT_TIP = {
@@ -368,7 +368,7 @@ function typeCell(record, field, id) {
   if (field === 'companyType' && !GIVES_COMPANY.has(id) && !record.data.companyType) return '<span class="muted">—</span>';
   const value = record.data[field];
   if (!value) return `<span class="ut ut-unknown" tabindex="0" data-tip="${esc(field === 'usageType' ? '这个来源没有给出使用类型（免费接口或套餐不含该字段）' : '这个来源没有给出公司类型')}">未知</span>`;
-  return `<span class="ut ut-${esc(value)}" tabindex="0" data-tip="${esc(`${SOURCES.find(source => source.id === id)?.name}：${UT_LABEL[value]}\n${UT_TIP[value] || ''}`)}">${esc(UT_LABEL[value] || value)}${record.data.importedFields?.includes(field) ? ' · IPSuper' : ''}</span>`;
+  return `<span class="ut ut-${esc(value)}" tabindex="0" data-tip="${esc(`${SOURCES.find(source => source.id === id)?.name}：${UT_LABEL[value]}\n${UT_TIP[value] || ''}`)}">${esc(UT_LABEL[value] || value)}${record.data.importedFields?.includes(field) ? ' · IPSuper' : field === 'usageType' && record.data.usageVia ? ' · '+esc(record.data.usageVia) : ''}</span>`;
 }
 
 export function renderTypes(run) {
@@ -423,6 +423,7 @@ function sourceValue(id, d) {
       const category = ({ hosting: '机房', residential: '家宽', mobile: '移动', business: '商业', vpn: 'VPN', tor: 'Tor', privacy_relay: '隐私中继', bogon: '保留地址', unknown: '类型未知' })[d.classification] || '类型未知';
       return `${category} · Beta${d.spamhausListed === true ? ' · Spamhaus 标记' : ''}`;
     }
+    case 'netcoffee': return (d.geoSources || []).map(r => r.id+' '+(r.city || r.country || '未知')).join(' · ') || '聚合查询';
     case 'netatlas': return [d.asn ? `AS${d.asn}` : '', d.prefix, d.city ? `${d.locationDatabase ? 'DB-IP' : '位置'} ${d.city}` : ''].filter(Boolean).join(' · ');
     case 'ipapimirror': return [d.country, d.usageType ? UT_LABEL[d.usageType] : '', '公开接口补充', d.cached ? '来源缓存' : ''].filter(Boolean).join(' · ');
     default: {

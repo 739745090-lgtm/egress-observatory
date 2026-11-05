@@ -34,8 +34,11 @@ export function setupImport() {
     try { if (location.hash.length < 12000) report = JSON.parse(decodeURIComponent(location.hash.slice('#ipsuper='.length))); } catch {}
     history.replaceState(null, '', location.pathname + location.search);
   }
+  return readReport(report, new URL(location.href).searchParams.get('ip'));
+}
+
+export function readReport(report, ip) {
   const result = new Map();
-  const ip = new URL(location.href).searchParams.get('ip');
   if (!report || report.ip !== ip || !Array.isArray(report.headers) || report.headers.length > 20 || !Number.isFinite(report.time) || Math.abs(Date.now()-report.time)>900000) return () => null;
   report.headers.forEach((name, i) => {
     const id = columns.get(name);

@@ -37,12 +37,12 @@
 ## 本地运行
 
 ```bash
-python -m http.server 4187 --bind 127.0.0.1
+python local_server.py
 ```
 
 打开 http://127.0.0.1:4187/ 。后端只允许 GitHub Pages 和本地 4187 端口跨域调用。加 `?captchaTest=1`（仅本地）会用 Cloudflare 的测试 key 跑一遍 Turnstile 流程，结果恒为通过。
 
-双击“启动网站.cmd”也可以启动本地页面。
+Windows 双击“启动网站.cmd”启动本机查询服务。点击“查询”后，服务用独立浏览器打开该 IP 的 IPSuper 结果页，按原数据库补回缺失的使用类型、公司类型。需要 Python、Playwright 和 Chromium（首次安装可运行 python -m pip install playwright 和 python -m playwright install chromium）。同一 IP 的页面结果在内存保留 10 分钟。GitHub Pages 使用此功能也需要本机服务运行。IPinfo 使用官方查询及 AbuseIPDB 提供的 IPinfo 使用类型。
 
 ## 代码结构
 

@@ -10,7 +10,7 @@
   <title>IP 纯净度检测 · Egress</title>
   <link rel="icon" href="./favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="./styles.css?v=2.3">
-  <script type="module" src="./src/main.js?v=2.6"></script>
+  <script type="module" src="./src/main.js?v=3.2"></script>
 </head>
 <body>
   <a class="skip-link" href="#main">跳到检测结果</a>
@@ -78,7 +78,7 @@
 
     <section class="card" id="breakdown-card"><h2 class="card-title">评分明细 <small>基准 92，正面证据加分、风险扣分，每类有上限；悬停查看依据</small></h2><div id="breakdown" class="breakdown"></div></section>
 
-    <section class="card"><h2 class="card-title">多源 IP 类型 <small>使用类型：这个地址怎么用；公司类型：持有它的是什么机构</small></h2><details><summary>导入 IPinfo 网页</summary><p><a id="ipinfo-page-link" target="_blank" rel="noopener noreferrer">打开当前 IP 的 IPinfo 详情页 ↗</a>，全选复制页面文字，粘贴后点击导入。</p><textarea id="ipinfo-text" aria-label="IPinfo 网页文字" maxlength="120000"></textarea> <button id="ipinfo-apply" type="button">导入 IPinfo 字段</button><p id="ipinfo-message" role="status"></p></details><details><summary>从 IPSuper 补全缺失类型</summary><p>将「导入类型」拖到书签栏，再打开当前 IP 的 IPSuper 查询。结果完整后点击书签，会在新页面按数据库补全缺失字段。</p><a id="ipsuper-bookmark" draggable="true">导入类型</a> · <a id="ipsuper-query" href="https://ipsuper.com/" target="_blank" rel="noopener noreferrer">打开 IPSuper 查询 ↗</a></details><div id="types" class="table-wrap"></div></section>
+    <section class="card"><h2 class="card-title">多源 IP 类型 <small>使用类型：这个地址怎么用；公司类型：持有它的是什么机构</small></h2><p id="auto-page-status" role="status"></p><details><summary>导入 IPinfo 网页</summary><p><a id="ipinfo-page-link" target="_blank" rel="noopener noreferrer">打开当前 IP 的 IPinfo 详情页 ↗</a>，全选复制页面文字，粘贴后点击导入。</p><textarea id="ipinfo-text" aria-label="IPinfo 网页文字" maxlength="120000"></textarea> <button id="ipinfo-apply" type="button">导入 IPinfo 字段</button><p id="ipinfo-message" role="status"></p></details><details><summary>从 IPSuper 补全缺失类型</summary><p>将「导入类型」拖到书签栏，再打开当前 IP 的 IPSuper 查询。结果完整后点击书签，会在新页面按数据库补全缺失字段。</p><a id="ipsuper-bookmark" draggable="true">导入类型</a> · <a id="ipsuper-query" href="https://ipsuper.com/" target="_blank" rel="noopener noreferrer">打开 IPSuper 查询 ↗</a></details><div id="types" class="table-wrap"></div></section>
 
     <section class="card"><h2 class="card-title">地理位置多源对比 <small>标红的行与共识国家不同</small></h2><div id="geo" class="table-wrap"></div></section>
 
