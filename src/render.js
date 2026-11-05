@@ -96,25 +96,14 @@ function asnTag(run, size = '') {
   const inferred = run.asnProfile?.inferred;
   if (!inferred?.cls) return run.asnProfile ? '<span class="muted">未知</span>' : '<span class="muted">—</span>';
   const clash = asnClash(run);
-  const lines = [`运营商类型（按 AS${run.asnProfile.asn} 推断）`, inferred.mix.slice(0, 4).map(part => `${ASN_LABEL[part.value]} ${pct(part.share)}`).join(' · '),
-    ...(clash ? [`矛盾：${clash.text}`] : []),
+  const declared = inferred.declared;
+  const lines = [clash ? `运营商类型：自报${ASN_LABEL[clash.cls]}，与检测矛盾` : `运营商类型（按 AS${run.asnProfile.asn} 推断）`,
+    ...(clash ? [clash.text, ...declared.by.map(reason => `· ${reason}`), '检测推断：'] : []),
+    inferred.mix.slice(0, 4).map(part => `${ASN_LABEL[part.value]} ${pct(part.share)}`).join(' · '),
     `推断置信 ${pct(inferred.confidence)}${inferred.confidence < UNSURE ? '：依据少或互相矛盾，所以标了 ?' : ''}`, '依据：', ...inferred.reasons.map(reason => `· ${reason}`)];
-  // The contradicted (self-declared) class turns red; the whole tag is hatched only when that class is the verdict itself.
-  return mixTag({ parts: inferred.mix, labels: ASN_LABEL, certainty: inferred.confidence, tip: lines.join('\n'), size,
-    tone: clash ? { [clash.cls]: clash.level } : {}, conflict: clash && inferred.mix[0]?.value === clash.cls ? clash.level : null });
-}
-
-/** "自报 ISP": what the ASN says about itself. Neutral when independent data agrees, red / amber when it does not. */
-function declaredTag(run) {
-  const inferred = run.asnProfile?.inferred;
-  const declared = inferred?.declared;
-  if (!declared) return '';
-  const clash = asnClash(run);
-  const observed = inferred.observed;
-  const lines = ['ASN 自报类型：PeeringDB 与网络名称，由运营方自己填写', ...declared.by.map(reason => `· ${reason}`),
-    clash ? `矛盾：${clash.text}` : observed ? `独立证据：${observed.label}（${pct(observed.share)}）${observed.cls === declared.cls ? '，与自报一致' : ''}` : '没有足够的独立证据可以对照'];
-  return mixTag({ parts: [{ value: declared.cls, share: 1 }], labels: value => `自报 ${ASN_LABEL[value] || value}`, tip: lines.join('\n'),
-    tone: { [declared.cls]: clash?.level || 'muted' }, conflict: clash?.level });
+  // A self-declared type that independent evidence contradicts is shown as the claim itself ("ISP"), in red or yellow.
+  if (clash) return mixTag({ parts: [{ value: clash.cls, share: 1 }], labels: ASN_LABEL, tip: lines.join('\n'), size, tone: { [clash.cls]: clash.level }, conflict: clash.level });
+  return mixTag({ parts: inferred.mix, labels: ASN_LABEL, certainty: inferred.confidence, tip: lines.join('\n'), size });
 }
 
 /** Why a source's 家宽 / 移动 label is contradicted: the IP is judged a datacenter, or its ASN is one by independent evidence. */
@@ -251,7 +240,7 @@ export function renderHero(run, result, view) {
     <div class="addr-row"><dt>位置</dt><dd>${place(s.country, s.city)}</dd></div>
     <div class="addr-row"><dt>所属网络</dt><dd>${asnLink(s.asn)} <span class="muted">${esc(s.org || '')}</span></dd></div>
     <div class="addr-row"><dt>类型</dt><dd>${typeTag(result)} ${nativeTag(result)} ${leaseTag(result)}</dd></div>
-    <div class="addr-row"><dt>运营商类型</dt><dd>${asnTag(run)} ${declaredTag(run)}</dd></div>
+    <div class="addr-row"><dt>运营商类型</dt><dd>${asnTag(run)}${run.asnProfile?.pdb?.type ? ` <span class="muted small">PeeringDB：${esc(run.asnProfile.pdb.type)}</span>` : ''}</dd></div>
     <div class="addr-row"><dt>主机名</dt><dd class="mono">${s.hostname ? ipText(s.hostname) : '–'}</dd></div>
     <div class="addr-row"><dt>时区</dt><dd>${esc(s.ipTimezone || '—')} <span class="muted">${s.ipOffset === null || s.ipOffset === undefined ? '' : formatOffset(s.ipOffset)}</span></dd></div>`;
 }
@@ -326,20 +315,21 @@ function asnTile(run, result, loading) {
   const clash = asnClash(run);
   const rank = { none: 0, good: 1, warn: 2, bad: 3 };
   const level = clash && rank[clash.level] > rank[c.level] ? clash.level : c.level;
-  const value = clash?.level === 'bad' ? '自报矛盾' : c.consistency ? (c.consistency.ok ? (c.consistency.warn || clash ? '需留意' : '一致') : '冲突') : '—';
-  return { label: 'ASN 一致性', level: loading(level), value, sub: c.consistency || clash ? `${asnTag(run)} ${clash ? declaredTag(run) : ''}` : '',
+  const value = clash?.level === 'bad' ? '冲突' : c.consistency ? (c.consistency.ok ? (c.consistency.warn || clash ? '需留意' : '一致') : '冲突') : '—';
+  return { label: 'ASN 一致性', level: loading(level), value, sub: c.consistency || clash ? asnTag(run) : '',
     pts: itemPts(result, 'asn-conflict') + itemPts(result, 'asn-transit') + itemPts(result, 'leased'), title: [c.consistency?.text, clash?.text].filter(Boolean).join('\n') };
 }
 
-/** Human share from the left, bot share from the right; they meet at the split. Shares that do not add to 100% leave a gap. */
-function splitBar(human, bot, { compact = false, label = '' } = {}) {
-  const total = Math.max(1, human + bot);
-  const h = Math.round(human * 100); const b = Math.round(bot * 100);
-  const track = `<span class="split-track"><i class="split-human" style="width:${(human / total * 100).toFixed(1)}%"></i><i class="split-bot" style="width:${(bot / total * 100).toFixed(1)}%"></i><i class="split-mid"></i></span>`;
-  return `<span class="split${compact ? ' compact' : ''}" role="img" aria-label="${esc(label || `人类 ${h}%，机器 ${b}%`)}">`
-    + (compact ? track : `<span class="split-ends"><span class="split-end human"><b class="num">${h}%</b>人类</span><span class="split-end bot">机器<b class="num">${b}%</b></span></span>${track}`)
-    + '</span>';
+/** Human share as a green bar from the left, bot share as a pink bar from the right, each share written under its end. */
+function splitBar(human, bot, label = '') {
+  const total = Math.max(0.001, human + bot);
+  const share = value => `${(value * 100).toFixed(1)}%`;
+  return `<span class="split" role="img" aria-label="${esc(label || `人类 ${share(human)}，机器 ${share(bot)}`)}">`
+    + `<span class="split-track"><i class="split-human" style="flex-grow:${(human / total).toFixed(3)}"></i><i class="split-bot" style="flex-grow:${(bot / total).toFixed(3)}"></i></span>`
+    + `<span class="split-ends"><span class="split-end human">人类 ${share(human)}</span><span class="split-end bot">机器 ${share(bot)}</span></span></span>`;
 }
+const BOT_LEVEL = { good: '人类为主', warn: '人机混合', bad: '机器为主' };
+const botBadge = level => `<span class="bot-badge lv-${level}"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="5.4" r="2.6"/><path d="M3.2 13.6c.7-2.6 2.5-4 4.8-4s4.1 1.4 4.8 4"/></svg>${BOT_LEVEL[level]}</span>`;
 
 /** 人机流量: Cloudflare Radar's human vs bot share of the ASN's HTTP traffic, human from the left and bots from the right. */
 function botTile(run, result) {
@@ -353,12 +343,11 @@ function botTile(run, result) {
     return { label: '人机流量', level: run.asnProfile ? 'none' : 'pending', value, sub: 'Cloudflare Radar', title, wide: true };
   }
   const human = Math.round(b.human * 100);
-  const level = { good: '人类为主', warn: '人机混合', bad: '机器为主' }[b.level];
   const title = [`人机流量：${asn} 近 ${b.window === '28d' ? '28 天' : b.window || '一段时间'}的 HTTP 请求里人类与机器的比例（Cloudflare Radar）`,
     `人类 ${human}% · 机器 ${Math.round(b.bot * 100)}%`, '运营商接入网通常机器占 10–30%；超过 40% 说明这个网络里服务器、爬虫较多，网站更容易弹验证或限流'].join('\n');
   return {
     label: '人机流量', level: b.level, wide: true, title, pts: itemPts(result, 'asn-bots'),
-    value: `<span class="tile-gauge">${splitBar(b.human, b.bot, { label: `${asn} 人类流量 ${human}%，机器流量 ${Math.round(b.bot * 100)}%` })}<span class="gauge-badge lv-${b.level}">${level}</span></span>`,
+    value: `<span class="tile-gauge">${splitBar(b.human, b.bot, `${asn} 人类流量 ${human}%，机器流量 ${Math.round(b.bot * 100)}%`)}${botBadge(b.level)}</span>`,
     sub: `${esc(asn)} · 运营商接入网通常机器占 10–30%`,
   };
 }
@@ -478,12 +467,12 @@ export function renderASN(run, result) {
     ${consistency ? `<p class="asn-verdict lv-${result.checks.asn.level}">${icon(result.checks.asn.level)}${esc(consistency.text)}</p>` : ''}
     <dl class="kv-list">
       ${row('机房倾向', `<span class="meter"><i style="width:${Math.round((inferred.hosting ?? 0) * 100)}%"></i></span> ${pct(inferred.hosting)}`)}
-      ${row('自报类型', inferred.declared || a.pdb ? `${declaredTag(run)}${a.pdb ? ` <span class="muted small">PeeringDB：${esc([a.pdb.type || '—', a.pdb.traffic, a.pdb.scope].filter(Boolean).join(' · '))}</span>` : ' <span class="muted small">按网络名称</span>'}` : '<span class="muted">未登记</span>')}
+      ${row('PeeringDB 自报', a.pdb ? `${esc(a.pdb.type || '—')}${a.pdb.traffic ? ` · ${esc(a.pdb.traffic)}` : ''}${a.pdb.scope ? ` · ${esc(a.pdb.scope)}` : ''}` : '<span class="muted">未登记</span>')}
       ${row('宣告规模', a.v4ips ? `${a.v4ips.toLocaleString()} 个 IPv4 · ${a.v4prefixes ?? '—'} 个前缀` : '—')}
       ${row('ASN 注册', a.regDate ? `${esc(a.regDate.slice(0, 10))}${a.asCountry ? ` · ${flag(a.asCountry)}${esc(a.asCountry)}` : ''}` : '—')}
       ${row('RPKI', a.rpki ? `<span class="pill pill-${a.rpki === 'valid' ? 'good' : a.rpki === 'invalid' ? 'bad' : 'muted'}">${esc(a.rpki)}</span>` : '—')}
       ${row('ASN 信誉', asnRepTag(run, result))}
-      ${row('人机流量', result.checks.bots.bot !== null ? `${splitBar(result.checks.bots.human, result.checks.bots.bot, { compact: true })} <span class="num">人类 ${pct(result.checks.bots.human)} · 机器 ${pct(result.checks.bots.bot)}</span> <span class="muted small">Cloudflare Radar</span>` : '<span class="muted">未配置 Radar</span>')}
+      ${row('人机流量', result.checks.bots.bot !== null ? `<span class="tile-gauge" tabindex="0" data-tip="人机流量：Cloudflare Radar 统计的 AS${a.asn} HTTP 请求里人类与机器的比例">${splitBar(result.checks.bots.human, result.checks.bots.bot)}${botBadge(result.checks.bots.level)}</span>` : '<span class="muted">未配置 Radar</span>')}
       ${row('所在网段', prefix ? `<span class="mono">${ipText(prefix)}</span>` : '—')}
       ${row('登记信息', rdap ? `${esc(rdap.netname || '')} · ${esc(rdap.orgName || '')}${rdap.regDate ? ` · ${esc(rdap.regDate.slice(0, 10))}` : ''}` : '—')}
       ${row('租赁判断', a.lease ? (leaseTag(result) || '<span class="pill pill-good">未见租赁特征</span>') + (a.lease.reasons.length ? ` <span class="muted small">${esc(a.lease.reasons.join('；'))}</span>` : '') : '—')}
