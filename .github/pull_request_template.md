@@ -22,9 +22,9 @@ Closes #
 - [ ] **数据源**：`README.md` 的检测内容、`DATA-SOURCES.md` 已同步
 - [ ] **后端**：`api/README.md` 已同步，合并后需要手动部署 `api/worker.js`
 - [ ] **查询服务**：`local_server.py`、`cloud_server.py`、`provider_pages.py` 或 `Dockerfile` 有变化，合并后确认 Render 已更新
-- [ ] **Chrome 扩展**：已升版本、重新打包到 `downloads/` 并更新所有版本引用（见 [贡献指南](https://github.com/BlackSlience-Reaper/egress-observatory/blob/main/CONTRIBUTING.md#chrome-扩展)）
+- [ ] **Chrome 扩展**：已升版本、重新打包到 `downloads/` 并更新所有版本引用（见 [贡献指南](https://github.com/BlackSlience-Reaper/egress-observatory/blob/master/CONTRIBUTING.md#chrome-扩展)）
 
 ## 提交前确认
 
 - [ ] 代码、文档、测试和截图里没有真实 IP，也没有密钥
-- [ ] PR 标题是一句英文祈使句，合并后它就是 `main` 上的提交信息
+- [ ] PR 标题是一句英文祈使句，合并后它就是 `master` 上的提交信息

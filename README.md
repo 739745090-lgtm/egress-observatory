@@ -5,7 +5,7 @@
 打开即检测本机出口 IP，给出一个能说清每一分扣在哪里的质量分。
 
 [![在线使用](https://img.shields.io/badge/%E5%9C%A8%E7%BA%BF%E4%BD%BF%E7%94%A8-Egress-2563eb)](https://blackslience-reaper.github.io/egress-observatory/)
-[![CI](https://github.com/BlackSlience-Reaper/egress-observatory/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/BlackSlience-Reaper/egress-observatory/actions/workflows/ci.yml)
+[![CI](https://github.com/BlackSlience-Reaper/egress-observatory/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/BlackSlience-Reaper/egress-observatory/actions/workflows/ci.yml)
 [![Stars](https://img.shields.io/github/stars/BlackSlience-Reaper/egress-observatory?style=flat)](https://github.com/BlackSlience-Reaper/egress-observatory/stargazers)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 [![爱发电](https://img.shields.io/badge/%E7%88%B1%E5%8F%91%E7%94%B5-%E8%B5%9E%E5%8A%A9-946ce6)](https://ifdian.net/a/Harukili)
@@ -119,7 +119,7 @@ npm test
 
 | 组件 | 位置 | 上线方式 |
 | --- | --- | --- |
-| 网站 | 仓库根目录，GitHub Pages | 合并到 `main` 后自动发布 |
+| 网站 | 仓库根目录，GitHub Pages | 合并到 `master` 后自动发布 |
 | API | `api/worker.js`，部署在 Sites | 手动部署，见 [api/README.md](api/README.md#部署) |
 | 网页查询服务 | `cloud_server.py`、`Dockerfile`、`render.yaml`，部署在 Render | Linux 容器从 Dockerfile 启动，`/health` 提供健康状态 |
 | Chrome 扩展 | `browser-helper/`，打包到 `downloads/` | 访客自行下载安装 |
@@ -167,7 +167,7 @@ npm test
 
 ## 参与开发
 
-任务统一放在 [Issues](https://github.com/BlackSlience-Reaper/egress-observatory/issues)，通过 PR 合入，`main` 受保护。反馈问题或提议新数据源时请[选择对应模板](https://github.com/BlackSlience-Reaper/egress-observatory/issues/new/choose)，并注意不要公开真实 IP。
+任务统一放在 [Issues](https://github.com/BlackSlience-Reaper/egress-observatory/issues)，通过 PR 合入，`master` 受保护。反馈问题或提议新数据源时请[选择对应模板](https://github.com/BlackSlience-Reaper/egress-observatory/issues/new/choose)，并注意不要公开真实 IP。
 
 环境配置（含 Windows）、分支约定和各模块的改动要求见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 

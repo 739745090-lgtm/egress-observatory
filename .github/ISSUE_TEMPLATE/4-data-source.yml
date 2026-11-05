@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        本站只把实际返回、且与目标 IP 一致的字段纳入结果；没有返回的字段保持未知，不当作“否”。详见 [DATA-SOURCES.md](https://github.com/BlackSlience-Reaper/egress-observatory/blob/main/DATA-SOURCES.md)。
+        本站只把实际返回、且与目标 IP 一致的字段纳入结果；没有返回的字段保持未知，不当作“否”。详见 [DATA-SOURCES.md](https://github.com/BlackSlience-Reaper/egress-observatory/blob/master/DATA-SOURCES.md)。
   - type: dropdown
     id: kind
     attributes:

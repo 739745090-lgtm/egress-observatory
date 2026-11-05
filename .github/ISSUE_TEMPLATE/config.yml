@@ -4,5 +4,5 @@ contact_links:
     url: https://blackslience-reaper.github.io/egress-observatory/
     about: 直接检测 IP，不需要提交 issue。
   - name: 对分数有疑问
-    url: https://github.com/BlackSlience-Reaper/egress-observatory/blob/main/SCORING.md
+    url: https://github.com/BlackSlience-Reaper/egress-observatory/blob/master/SCORING.md
     about: 先看评分规则：每一项的权重、上限和依据都在这里。
