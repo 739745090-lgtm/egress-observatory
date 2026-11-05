@@ -2,3 +2,6 @@
 !Dockerfile
 !cloud_server.py
 !local_server.py
+!provider_pages.py
+!src/
+!src/page-extract.js
