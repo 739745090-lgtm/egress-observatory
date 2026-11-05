@@ -1,14 +1,14 @@
-import { setupImport, supplementTypes } from './ipsuper.js';
+import { setupImport, supplementTypes } from './ipsuper.js?v=2.4';
 /** Orchestration: detect the egress, fan out every check, rescore as results arrive. */
 import { API_BASE } from '../config.js';
 import { getJSON, parseIP, isPublicIP, sameIP, maskIP } from './util.js';
-import { SOURCES, runSource } from './sources.js';
+import { SOURCES, runSource } from './sources.js?v=2.4';
 import { DNSBLS, checkDNSBL, CIDR_LISTS, checkCIDRList, asnAbuseDensity } from './blocklists.js';
 import { fetchASN, inferASN, detectLease } from './asn.js';
 import { detectEgress, summarizeEgress, probeWebRTC, probeDNS, classifyDNS, probeTCP, probeEnvironment, probeIPv6, classifyIPv6, traceProbe } from './probes.js';
 import { runTurnstile, runRecaptcha } from './captcha.js';
 import { score } from './score.js';
-import * as view from './render.js';
+import * as view from './render.js?v=2.4';
 
 const $ = id => document.getElementById(id);
 const app = {
