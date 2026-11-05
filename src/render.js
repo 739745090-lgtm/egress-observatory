@@ -582,6 +582,7 @@ function sourceValue(id, d) {
     case 'ipguide': return `${d.prefix || ''}${d.rir ? ` · ${d.rir}` : ''}`;
     case 'shodan': return d.unseen ? '未被扫描' : (d.ports.length ? `${d.tags.join(' ') || '端口'} ${d.ports.slice(0, 3).join(', ')}` : '无开放端口') + (d.vulns?.length ? ` · ${d.vulns.length} 个 CVE` : '');
     case 'sfs': return d.appears ? `记录 ${d.appears} 次` : '无记录';
+    case 'greynoise': return d.classification === 'unseen' || d.noise === false ? '未观测到扫描' : [({ benign: '良性扫描', malicious: '恶意扫描', suspicious: '可疑扫描', unknown: '扫描' })[d.classification] || d.classification, d.name].filter(Boolean).join(' · ') || '—';
     case 'onionoo': return d.flags.tor ? 'Tor 出口' : d.torRelay ? 'Tor 中继（非出口）' : '不在 Tor 列表';
     case 'ptr': return d.hostname || '无 PTR';
     case 'blackbox': {

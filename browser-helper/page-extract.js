@@ -62,7 +62,65 @@ export function extractProviderPage(provider, ip, raw = null) {
       const proxy = ['Public Proxy','Web Proxy'].map(key => yes(rows[key]));
       if (proxy.includes(true)) data.flags.proxy = true;
       else if (proxy.every(v => v === false)) data.flags.proxy = false;
+      if (data.flags.hosting == null) { const server = yes(rows.Server); if (server !== null) data.flags.hosting = server; }
+      // The blacklist rows Scamalytics checks itself (Spamhaus, FireHOL, IPsum, X4Bnet).
+      const listed = ['Spamhaus','Firehol','IPsum','X4Bnet Spambot'].map(key => yes(rows[key])).filter(v => v !== null);
+      if (listed.includes(true)) data.flags.abuser = true; else if (listed.length) data.flags.abuser = false;
       data.connectionType = clean(rows['Connection type']); data.usageType = type(data.connectionType);
+      data.country = clean(rows['Country Code']); if (!/^[A-Z]{2}$/.test(data.country || '')) delete data.country;
+      data.city = clean(rows.City); data.region = clean(rows['State / Province']);
+      data.asn = Number(rows.ASN) || null; data.org = clean(rows['Organization Name'] || rows['ISP Name']);
+      data.geoVote = false;
+    }
+  } else if (provider === 'ip2location') {
+    // Server-rendered "label + p.ip-result" pairs; richer than the keyless API (usage, proxy type, threat, fraud score).
+    const f = {};
+    for (const label of document.querySelectorAll('label')) {
+      const value = label.nextElementSibling;
+      if (value?.classList.contains('ip-result')) f[label.innerText.trim()] ??= value.innerText.trim();
+    }
+    returned = f['IP Address'] === ip ? ip : null;
+    if (returned) {
+      const code = value => /^\(([A-Z/]+)\)/.exec(value || '')?.[1] || null;
+      const usage = code(f['Usage Type']);
+      data.usageType = usage ? ({ISP:'residential', 'ISP/MOB':'mobile', MOB:'mobile', DCH:'hosting', CDN:'hosting', SES:'hosting', COM:'business', ORG:'business', EDU:'education', LIB:'education', GOV:'government', MIL:'government'})[usage] || null : null;
+      data.usageDetail = clean(f['Usage Type']);
+      data.country = /\(([A-Z]{2})\)\s*$/.exec(f.Country || '')?.[1] || null;
+      data.region = clean(f.Region); data.city = clean(f.City);
+      const [lat, lon] = String(f.Coordinates || '').split(',').map(Number);
+      if (Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180) { data.lat = lat; data.lon = lon; }
+      data.asn = Number(f.ASN) || null; data.org = clean(f.ISP || f.AS);
+      const proxy = yes(String(f.Proxy || '').trim().split(/\s+/).at(-1));
+      if (proxy !== null) data.flags.proxy = proxy;
+      // "(TOR) Tor Exit Nodes". IP2Proxy types: VPN, TOR, DCH, PUB, WEB, SES, RES, CPN (consumer privacy network), EPN (enterprise).
+      const kind = (code(f['Proxy Type']) || clean(f['Proxy Type']) || '').toUpperCase();
+      const key = kind && ({VPN:'vpn', EPN:'vpn', TOR:'tor', DCH:'hosting', PUB:'proxy', WEB:'proxy', SES:'crawler', RES:'resProxy', CPN:'relay'})[kind];
+      if (key) data.flags[key] = true;
+      const threat = clean(f.Threat)?.toUpperCase();
+      if (threat && /SPAM|SCANNER|BOTNET/.test(threat)) data.flags.abuser = true;
+      if (threat && /BOGON/.test(threat)) data.flags.bogon = true;
+      const score = Number(f['Fraud Score']);
+      if (f['Fraud Score'] && Number.isInteger(score) && score >= 0 && score <= 100) data.risk = score;
+      data.proxyProvider = clean(f.Provider);
+    }
+  } else if (provider === 'greynoise') {
+    // The logged-out Visualizer shows scanner observations; business-service (RIOT) data needs an account.
+    returned = document.title.split('|')[0].trim() === ip && /\nScope:/.test(body) ? ip : null;
+    const after = label => new RegExp('\\n' + label + '\\n(?:>\\n)?([^\\n]+)').exec(body)?.[1].trim() || null;
+    const classification = after('Classification')?.toLowerCase();
+    const unseen = /\nNOT OBSERVED\n/.test(body);
+    if (returned && !unseen && !classification) returned = null;
+    if (returned) {
+      data.noise = !unseen;
+      data.flags.crawler = !unseen;
+      data.classification = unseen ? 'unseen' : classification;
+      if (classification === 'malicious') data.flags.abuser = true;
+      if (classification === 'benign') data.flags.abuser = false;
+      if (!unseen) {
+        data.name = clean(after('Actor')); data.lastSeen = clean(after('Last Seen'));
+        for (const [label, key] of [['VPN','vpn'],['Tor','tor']]) { const value = yes(after(label)); if (value !== null) data.flags[key] = value; }
+      }
+      data.asn = Number(String(after('ASN') || '').replace(/^AS/i, '')) || null; data.org = clean(after('Organization') || after('AS Name'));
       data.geoVote = false;
     }
   } else {
@@ -108,7 +166,7 @@ export function extractProviderPage(provider, ip, raw = null) {
   }
   if (data.flags.resProxy === true) data.flags.proxy = true;
   if (returned !== ip) {
-    if (/checking your browser|checking your connection|security verification|verify you are human|just a moment|human verification/i.test(body)) throw Error('网页需要浏览器或人机校验');
+    if (/checking your browser|checking your connection|security verification|verify you are human|confirm you.re human|just a moment|human verification|正在进行安全验证|确认您是真人|请验证您是真人/i.test(body)) throw Error('网页需要浏览器或人机校验');
     if (/rate limit|too many requests|quota|limit reached/i.test(body)) throw Error('网页查询额度或频率受限');
     throw Error('网页未返回与目标 IP 一致的字段');
   }

@@ -1,10 +1,14 @@
 {
   "manifest_version": 3,
   "name": "Egress 自动网页查询",
-  "version": "1.1.0",
-  "description": "自动读取 IPHub、IPQualityScore 与 IPSuper 第三方检测结果，回传给 Egress 并清理临时标签。",
+  "version": "1.2.0",
+  "description": "用当前 Chrome 会话读取 IPSuper、IPHub、IPQualityScore、Scamalytics、IP2Location、GreyNoise、DB-IP、IPData、IPRegistry、Blackbox 与 IPQuery 的检测结果，回传给 Egress 并清理临时标签。",
   "permissions": ["tabs", "scripting", "tabGroups"],
-  "host_permissions": ["https://iphub.info/*", "https://www.ipqualityscore.com/*", "https://ipsuper.com/*"],
+  "host_permissions": [
+    "https://ipsuper.com/*", "https://iphub.info/*", "https://www.ipqualityscore.com/*", "https://scamalytics.com/*",
+    "https://www.ip2location.io/*", "https://viz.greynoise.io/*", "https://db-ip.com/*", "https://ipdata.co/*",
+    "https://ipregistry.co/*", "https://blackbox.ipinfo.app/*", "https://api.ipquery.io/*"
+  ],
   "background": {"service_worker": "background.js", "type": "module"},
   "content_scripts": [{
     "matches": ["https://blackslience-reaper.github.io/egress-observatory/*", "http://127.0.0.1:4187/*", "http://localhost:4187/*"],

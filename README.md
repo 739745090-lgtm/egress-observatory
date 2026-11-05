@@ -50,9 +50,9 @@ Windows 双击“启动网站.cmd”启动本机查询服务。点击“查询�
 
 网站默认在云端读取 IPSuper 的逐库类型、风险分和风险矩阵，供所有访客自动补全，访客无需安装插件。IPOK 与已有公开接口同时提供间接补充；第三方失败或额度不足时保留原因。
 
-IPHub、IPQualityScore 与 IPSuper 另支持可选的 [Chrome 自动查询扩展](browser-helper/README.md)，使用访客当前浏览器会话增强本机结果。安装后，“查询”和“重新检测”会自动建立临时标签组，先读取 IPSuper 第三方逐库类型和风险矩阵，再读取两站的目标字段并关闭临时标签；不需要逐次导入，也不向服务器复制 Cookie。页面显示 Chrome 的逐源自动读取状态。查询取消会关闭该页发起的临时标签，其他标签保持原状。
+可选的 [Chrome 自动查询扩展](browser-helper/README.md) 使用访客当前浏览器会话增强本机结果。安装后，“查询”和“重新检测”会自动建立临时标签组，最多同时打开 3 个来源查询页，逐个读取目标字段后关闭标签，每读到一个就合并进结果；不需要逐次导入，也不向服务器复制 Cookie。页面显示 Chrome 的逐源自动读取状态。查询取消会关闭该页发起的临时标签，其他标签保持原状。
 
-[下载 Chrome 扩展 v1.1.0（ZIP）](https://blackslience-reaper.github.io/egress-observatory/downloads/egress-browser-helper-v1.1.0.zip)。网页“多源 IP 类型”区也提供下载和安装说明，访客可自行选择。安装包保存在仓库 `downloads/`，包含完整的 `browser-helper/` 文件夹；解压后按[安装说明](browser-helper/README.md)加载即可。
+[下载 Chrome 扩展 v1.2.0（ZIP）](https://blackslience-reaper.github.io/egress-observatory/downloads/egress-browser-helper-v1.2.0.zip)。扩展用当前 Chrome 会话读取 IPSuper、IPHub、IPQualityScore、Scamalytics、IP2Location、GreyNoise、DB-IP、IPData、IPRegistry、Blackbox 与 IPQuery 的查询页，补齐接口缺失的字段；遇到人机验证时由你点「去验证」自己完成。网页“多源 IP 类型”区也提供下载和安装说明，访客可自行选择。安装包保存在仓库 `downloads/`，包含完整的 `browser-helper/` 文件夹；解压后按[安装说明](browser-helper/README.md)加载即可。
 
 网页中的明确 VPN、代理、Tor、机房、中继、爬虫和滥用标记进入现有加权投票，明确的 0–100 风险分进入风险评分。IPSuper 的逐库风险矩阵也会自动补充这些字段；未支持和获取失败的格子不投票。IPQS、Scamalytics、AbuseIPDB 的具名风险分用于评分，其他条形百分比保留原意。官网、Chrome、IPSuper 和 IPOK 的同库结果合并，只保留一份来源权重，返回字段时立即重新计算总分和用途评分。
 

@@ -1,9 +1,9 @@
 import { sameIP } from './util.js';
 import { fillSource } from './supplements.js?v=3';
-import { extractProviderPage } from './page-extract.js?v=2';
+import { extractProviderPage } from './page-extract.js?v=3';
 
-export const PAGE_SOURCES = ['iphub','ipqs','ipdata','ipregistry','dbip','scamalytics','ipapiis','ipquery','blackbox'];
-const fields = new Set(['country','city','region','asn','org','usageType','companyType','asnType','usageDetail','connectionType','risk','block','geoVote']);
+export const PAGE_SOURCES = ['iphub','ipqs','ipdata','ipregistry','dbip','scamalytics','ipapiis','ipquery','blackbox','ip2location','greynoise'];
+const fields = new Set(['country','city','region','asn','org','usageType','companyType','asnType','usageDetail','connectionType','risk','block','geoVote','lat','lon','noise','classification','name','lastSeen','proxyProvider']);
 const types = new Set(['residential','mobile','business','hosting','education','government']);
 
 export function readProviderReport(report, ip) {
@@ -12,7 +12,7 @@ export function readProviderReport(report, ip) {
   for (const id of PAGE_SOURCES) {
     const row = report.sources[id];
     if (!row) continue;
-    if (row.status !== 'ok') { result[id] = {status:'error',error:String(row.error || '网页未返回字段').slice(0,120)}; continue; }
+    if (row.status !== 'ok') { result[id] = {status:'error',error:String(row.error || '网页未返回字段').slice(0,120),...(row.status === 'challenge' ? {challenge:true} : {})}; continue; }
     if (!Number.isFinite(row.time) || Math.abs(Date.now()-row.time)>600000) continue;
     const data = {flags:{}};
     for (const [key,value] of Object.entries(row.data || {})) {
@@ -21,10 +21,11 @@ export function readProviderReport(report, ip) {
       else if (key === 'risk') { if (typeof value === 'number' && value >= 0 && value <= 100) data[key] = value; }
       else if (key === 'asn') { if (Number.isInteger(value) && value > 0 && value <= 4294967295) data[key] = value; }
       else if (key === 'block') { if ([0,1,2].includes(value)) data[key] = value; }
-      else if (key === 'geoVote') { if (typeof value === 'boolean') data[key] = value; }
+      else if (key === 'geoVote' || key === 'noise') { if (typeof value === 'boolean') data[key] = value; }
+      else if (key === 'lat' || key === 'lon') { if (typeof value === 'number' && Math.abs(value) <= (key === 'lat' ? 90 : 180)) data[key] = value; }
       else if (typeof value === 'string' && value.length <= 240) data[key] = value;
     }
-    for (const key of ['vpn','proxy','tor','hosting','mobile','abuser','crawler','relay','resProxy']) if (typeof row.data?.flags?.[key] === 'boolean') data.flags[key] = row.data.flags[key];
+    for (const key of ['vpn','proxy','tor','hosting','mobile','abuser','crawler','relay','resProxy','bogon']) if (typeof row.data?.flags?.[key] === 'boolean') data.flags[key] = row.data.flags[key];
     if (!Object.keys(data.flags).length && Object.keys(data).every(key => ['flags','geoVote'].includes(key))) {
       result[id] = {status:'error',error:'网页未提供可读取的目标字段'};
     } else result[id] = {status:'ok',data,time:row.time,...(row.via === 'Chrome' ? {via:'Chrome'} : {})};
@@ -49,24 +50,31 @@ export function mergeProviderPage(record, page, name) {
   return {...merged,webLookup:page};
 }
 
-export function lookupChromePages(ip,signal,progress=()=>{}) {
+/**
+ * Ask the installed helper extension to read the source pages in this Chrome session.
+ * onStart(focus) fires once it answers; focus(provider) brings a page waiting on a human check to the front.
+ * onPartial(report) receives each source as soon as it is read; the promise resolves with the full report.
+ */
+export function lookupChromePages(ip,signal,{onStart=()=>{},onPartial=()=>{}}={}) {
   return new Promise((resolve,reject)=>{
     signal.throwIfAborted();
     const requestId = crypto.randomUUID();
     let started = false;
     let discover,timeout;
-    const send = kind => window.postMessage({channel:'egress-browser-client',kind,requestId,ip},location.origin);
+    const send = (kind,extra={}) => window.postMessage({channel:'egress-browser-client',kind,requestId,ip,...extra},location.origin);
     const finish = (value,error) => { clearTimeout(discover);clearTimeout(timeout);window.removeEventListener('message',receive);signal.removeEventListener('abort',abort); error ? reject(error) : resolve(value); };
     const abort = () => { send('cancel'); finish(null,signal.reason); };
     const receive = event => {
       if(event.source!==window || event.origin!==location.origin || event.data?.channel!=='egress-browser-helper') return;
       const message = event.data;
       if(message.kind==='ready' && (!message.requestId || message.requestId===requestId) && !started) {
-        started=true;clearTimeout(discover);progress();send('lookup');
-        timeout=setTimeout(()=>{send('cancel');finish(null,Error('Chrome 网页读取超时'));},160000);
+        started=true;clearTimeout(discover);send('lookup');
+        onStart(provider=>send('focus',{provider}));
+        timeout=setTimeout(()=>{send('cancel');finish(null,Error('Chrome 网页读取超时'));},230000);
       }
       if(message.requestId!==requestId) return;
-      if(message.kind==='report') finish(message.report);
+      if(message.kind==='partial') { try { onPartial(message.report); } catch { /* A malformed partial row is dropped; the final report repeats it. */ } }
+      else if(message.kind==='report') finish(message.report);
       else if(message.kind==='error') finish(null,Error(message.error));
     };
     window.addEventListener('message',receive);
@@ -80,7 +88,7 @@ export function setupProviderImport() {
   const destination = location.origin + location.pathname;
   // Runs only when the user clicks their bookmark on an official result page.
   function send(destination, extract) {
-    const providers = {'iphub.info':'iphub','www.ipqualityscore.com':'ipqs','ipqualityscore.com':'ipqs','ipdata.co':'ipdata','ipregistry.co':'ipregistry','db-ip.com':'dbip','scamalytics.com':'scamalytics','ipapi.is':'ipapiis','api.ipquery.io':'ipquery','blackbox.ipinfo.app':'blackbox'};
+    const providers = {'iphub.info':'iphub','www.ipqualityscore.com':'ipqs','ipqualityscore.com':'ipqs','ipdata.co':'ipdata','ipregistry.co':'ipregistry','db-ip.com':'dbip','scamalytics.com':'scamalytics','ipapi.is':'ipapiis','api.ipquery.io':'ipquery','blackbox.ipinfo.app':'blackbox','www.ip2location.io':'ip2location','viz.greynoise.io':'greynoise'};
     const provider = providers[location.hostname];
     if (!provider) return alert('请在支持的来源查询结果页使用此书签。');
     const ip = provider === 'iphub' ? document.querySelector('[data-copy-field=ip]')?.textContent.trim() : provider === 'ipapiis' ? document.querySelector('input[type=search]')?.value.trim() : decodeURIComponent(location.pathname.split('/').filter(Boolean).at(-1) || '');
