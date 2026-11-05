@@ -3,7 +3,7 @@ import { readIPinfoPage, mergeIPinfoPage } from './ipinfo-page.js?v=3.4';
 import { setupImport, supplementTypes, readReport } from './ipsuper.js?v=3.1';
 /** Orchestration: detect the egress, fan out every check, rescore as results arrive. */
 import { API_BASE, PAGE_LOOKUP_CLOUD } from '../config.js?v=cloud2';
-import { lookupPage } from './page-lookups.js?v=1';
+import { lookupPage } from './page-lookups.js?v=2';
 import { getJSON, parseIP, isPublicIP, sameIP, maskIP, maskText } from './util.js?v=4.1';
 import { SOURCES, runSource } from './sources.js?v=3.2';
 import { DNSBLS, checkDNSBL, CIDR_LISTS, checkCIDRList, asnAbuseDensity } from './blocklists.js';
