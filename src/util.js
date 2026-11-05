@@ -118,6 +118,25 @@ export function maskIP(ip) {
   return `${parsed.ip.split(':').slice(0, 2).join(':')}:••••:••••`;
 }
 
+/**
+ * Hide addresses inside free text (details, tooltips, hostnames, reports). Dotted IPv4, with an optional /len,
+ * keeps its first two octets like maskIP — so a /24 no longer gives away the third octet — and IPv6 keeps two groups.
+ * IP-like number runs in hostnames ("9-113-0-203") are hidden completely, and so is a dotted address that is the
+ * reversed form of one in `known` (reverse-DNS style names), which would otherwise show the last two octets.
+ */
+export function maskText(text, known = []) {
+  if (!text) return text;
+  const prefixes = known.map(parseIP).filter(parsed => parsed?.v === 4).map(parsed => parsed.ip.split('.').slice(0, 3).join('.'));
+  return String(text)
+    .replace(/(?<![\d.])(\d{1,3}(?:\.\d{1,3}){3})(\/\d{1,2})?(?!\d)/g, (all, address, length = '') => {
+      if (!parseIP(address)) return all;
+      const reversed = address.split('.').reverse().join('.');
+      return prefixes.some(prefix => reversed.startsWith(`${prefix}.`)) ? `•••.•••.•••.•••${length}` : maskIP(address) + length;
+    })
+    .replace(/(?<![\w:])((?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4})(\/\d{1,3})?(?![\w:])/gi, (all, address, length = '') => (parseIP(address)?.v === 6 ? maskIP(address) + length : all))
+    .replace(/(?<![\d.])\d{1,3}(?:[-_]\d{1,3}){2,3}(?!\d)/g, run => run.replace(/\d+/g, '•••'));
+}
+
 export function sameIP(a, b) {
   const left = parseIP(a); const right = parseIP(b);
   return Boolean(left && right && left.ip === right.ip);

@@ -3,14 +3,14 @@ import { readIPinfoPage, mergeIPinfoPage } from './ipinfo-page.js?v=3.4';
 import { setupImport, supplementTypes, readReport } from './ipsuper.js?v=3.1';
 /** Orchestration: detect the egress, fan out every check, rescore as results arrive. */
 import { API_BASE, PAGE_LOOKUP_BASE, PAGE_LOOKUP_CLOUD } from '../config.js?v=cloud1';
-import { getJSON, parseIP, isPublicIP, sameIP, maskIP } from './util.js';
+import { getJSON, parseIP, isPublicIP, sameIP, maskIP, maskText } from './util.js?v=4.1';
 import { SOURCES, runSource } from './sources.js?v=3.2';
 import { DNSBLS, checkDNSBL, CIDR_LISTS, checkCIDRList, asnAbuseDensity } from './blocklists.js';
 import { fetchASN, inferASN, detectLease } from './asn.js';
 import { detectEgress, summarizeEgress, probeWebRTC, probeDNS, classifyDNS, probeTCP, probeEnvironment, probeIPv6, classifyIPv6, traceProbe } from './probes.js';
 import { runTurnstile, runRecaptcha } from './captcha.js';
 import { score } from './score.js?v=4.0';
-import * as view from './render.js?v=4.0';
+import * as view from './render.js?v=4.1';
 
 const $ = id => document.getElementById(id);
 const app = {
@@ -329,7 +329,8 @@ async function runCaptcha(run, kind, alive = () => app.run === run) {
 function exportReport() {
   const run = app.run;
   if (!run?.result) return;
-  const hide = value => app.masked && typeof value === 'string' ? value.split(run.ip).join('[hidden]') : value;
+  // Hidden mode masks every address in the report (the IP, its /24, neighbours, hostnames), not just the exact IP string.
+  const hide = value => (app.masked && typeof value === 'string' ? maskText(value, [run.ip]) : value);
   const report = {
     schema: 'egress-report/v3', exportedAt: new Date().toISOString(), ip: app.masked ? maskIP(run.ip) : run.ip, self: run.self,
     score: run.result.score, ipScore: run.result.ipScore, grade: run.result.grade, verdict: run.result.verdict,

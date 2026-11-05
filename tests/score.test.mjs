@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 globalThis.location ??= { hostname: '' };
 const { score, gradeOf } = await import('../src/score.js');
 const { inferASN, detectLease } = await import('../src/asn.js');
-const { parseIP, isPublicIP, cidrContains, reverseName } = await import('../src/util.js');
+const { parseIP, isPublicIP, cidrContains, reverseName, maskText } = await import('../src/util.js');
 const { classifyDNS } = await import('../src/probes.js');
 const { classifyHostname } = await import('../src/sources.js');
 
@@ -236,6 +236,17 @@ test('DNS classification against the egress location', () => {
   const leak = classifyDNS({ status: 'ok', resolvers: [{ ip: '202.96.1.1', country: 'CN', asn: 4134, org: 'Chinanet' }] }, { country: 'US', asn: 7922 });
   assert.equal(leak.verdict, 'leak-cn');
   assert.equal(classifyDNS({ status: 'ok', resolvers: [{ ip: '1.1.1.1', country: 'JP', asn: 2516 }] }, { country: 'JP', asn: 2516 }).verdict, 'own');
+});
+
+test('hidden mode masks every address in free text, including the /24 and hostname forms', () => {
+  const known = ['203.0.113.9'];
+  assert.equal(maskText('203.0.113.0/24 在 14 个威胁列表里没有任何邻居上榜', known), '203.0.•••.•••/24 在 14 个威胁列表里没有任何邻居上榜');
+  assert.equal(maskText('例如 203.0.113.7、203.0.113.99', known), '例如 203.0.•••.•••、203.0.•••.•••');
+  assert.equal(maskText('9.113.0.203.static.example.net', known), '•••.•••.•••.•••.static.example.net');
+  assert.equal(maskText('9-113-0-203.static.isp.jp', known), '•••-•••-•••-•••.static.isp.jp');
+  assert.equal(maskText('2001:db8::/32', known), '2001:db8:••••:••••/32');
+  // Not addresses: dates, clock times, ratios, ports, ASNs.
+  for (const text of ['最近 2025-07-10', 'Asia/Tokyo 10:36:14', '约为全网平均的 0.1 倍', '端口 12323, 44444', 'AS4637 · 机器 51%']) assert.equal(maskText(text, known), text);
 });
 
 test('IP helpers', () => {

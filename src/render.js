@@ -1,5 +1,5 @@
 /** DOM rendering. All external text goes through esc(). */
-import { esc, countryName, maskIP, formatOffset, zoneOffset } from './util.js';
+import { esc, countryName, maskIP, maskText, formatOffset, zoneOffset } from './util.js?v=4.1';
 import { SOURCES } from './sources.js?v=3.2';
 import { DNSBLS, CIDR_LISTS } from './blocklists.js';
 import { CATEGORIES, TYPE_LABEL } from './score.js?v=4.0';
@@ -19,6 +19,14 @@ const icon = level => `<span class="ico ico-${level}">${ICONS[level] || ICONS.no
 const flag = code => code ? `<img class="flag" src="https://flagcdn.com/w40/${esc(code.toLowerCase())}.png" alt="" width="20" height="15" loading="lazy" referrerpolicy="no-referrer">` : '';
 const place = (code, city) => code ? `${flag(code)}<span>${city ? `${esc(city)}，` : ''}${esc(countryName(code))}</span>` : '<span class="muted">—</span>';
 const ipSpan = (ip, masked) => `<span class="ipv" data-ip="${esc(ip)}">${esc(masked ? maskIP(ip) : ip)}</span>`;
+// "隐藏 IP" state. Free text that carries addresses (prefixes, neighbours, hostnames, details) goes through ipText,
+// tooltips are masked when shown, and applyMask re-masks both live.
+let masked = false; let knownIPs = [];
+const scrub = text => (masked ? maskText(text, knownIPs) : text);
+const ipText = value => {
+  const raw = String(value ?? '');
+  return maskText(raw) === raw ? esc(raw) : `<span class="ipt" data-raw="${esc(raw)}">${esc(scrub(raw))}</span>`;
+};
 const pen = pts => pts ? `<span class="pen">−${Math.round(pts)}</span>` : '';
 const asnLink = asn => asn ? `<a class="asn" href="https://bgp.tools/as/${asn}" target="_blank" rel="noopener noreferrer">AS${asn}</a>` : '—';
 const pct = value => typeof value === 'number' ? `${Math.round(value * 100)}%` : '—';
@@ -114,7 +122,7 @@ export function initTooltips() {
   document.body.append(tipNode);
   const show = target => {
     tipFor = target;
-    tipNode.textContent = target.dataset.tip;
+    tipNode.textContent = scrub(target.dataset.tip);
     tipNode.classList.add('on');
     const rect = target.getBoundingClientRect(); const box = tipNode.getBoundingClientRect();
     const above = rect.top - box.height - 8;
@@ -139,6 +147,7 @@ function itemPts(result, id) {
 // ---------- hero ----------
 
 export function renderHero(run, result, view) {
+  knownIPs = [run.ip];
   const g = result.grade;
   const pending = result.confidence.pending;
   const circumference = 2 * Math.PI * 52;
@@ -165,7 +174,7 @@ export function renderHero(run, result, view) {
     <div class="addr-row"><dt>所属网络</dt><dd>${asnLink(s.asn)} <span class="muted">${esc(s.org || '')}</span></dd></div>
     <div class="addr-row"><dt>类型</dt><dd>${typeTag(result)} ${nativeTag(result)} ${leaseTag(result)}</dd></div>
     <div class="addr-row"><dt>运营商类型</dt><dd>${asnTag(run)}${run.asnProfile?.pdb?.type ? ` <span class="muted small">PeeringDB：${esc(run.asnProfile.pdb.type)}</span>` : ''}</dd></div>
-    <div class="addr-row"><dt>主机名</dt><dd class="mono">${esc(s.hostname || '–')}</dd></div>
+    <div class="addr-row"><dt>主机名</dt><dd class="mono">${s.hostname ? ipText(s.hostname) : '–'}</dd></div>
     <div class="addr-row"><dt>时区</dt><dd>${esc(s.ipTimezone || '—')} <span class="muted">${s.ipOffset === null || s.ipOffset === undefined ? '' : formatOffset(s.ipOffset)}</span></dd></div>`;
 }
 
@@ -260,7 +269,7 @@ function neighbourTile(nb, result, loading) {
   const value = nb.whole?.length ? '整段上榜' : nb.count ? `${nb.count} 个邻居上榜` : nb.tor ? '有 Tor 节点' : '干净';
   const tip = [`同一 /24（${nb.prefix}）里其他地址的表现`, nb.whole?.length ? `整段被列入：${nb.whole.join('、')}` : '', nb.lists?.length ? `上榜：${nb.lists.join('、')}` : '',
     nb.sample?.length ? `例如 ${nb.sample.join('、')}` : '', nb.tor ? `Tor 中继 ${nb.tor} 个` : '', nb.abuseipdb ? `AbuseIPDB 30 天内被举报 ${nb.abuseipdb.reported} 个` : '', `查了 ${nb.checked} 个威胁列表`].filter(Boolean).join('\n');
-  return { label: '邻居网段', level: nb.level, value, sub: esc(nb.prefix || ''), pts: itemPts(result, 'block-listed') + itemPts(result, 'neighbours') + itemPts(result, 'neighbour-tor'), title: tip };
+  return { label: '邻居网段', level: nb.level, value, sub: ipText(nb.prefix || ''), pts: itemPts(result, 'block-listed') + itemPts(result, 'neighbours') + itemPts(result, 'neighbour-tor'), title: tip };
 }
 
 const USE_LABELS = { stream: '流媒体', ai: 'AI 服务', captcha: '验证码', account: '注册付款', mail: '发邮件', social: '社媒 / TikTok' };
@@ -303,7 +312,7 @@ export function renderLive(run, result, egress, view) {
   tiles.push({ label: 'WebRTC', level: lv('webrtc'), value: !w ? '检测中' : w.status !== 'ok' ? '失败' : !w.supported ? '已禁用' : w.leak ? `泄漏 ${w.leakIPs.map(ip => ipSpan(ip, view.masked)).join(' ')}` : w.srflx.length ? '无泄漏' : 'UDP 不通', sub: w?.status === 'ok' ? esc(w.leak ? '' : w.srflx.length ? 'UDP 出口一致' : '') : '', pts: itemPts(result, 'webrtc'), title: w?.summary });
   const d = p.dnsClassified;
   const dnsTitle = { own: '同网解析', same: '同一国家', public: '公共 DNS 跨区', leak: 'DNS 泄漏', 'leak-cn': '真实位置泄漏' };
-  tiles.push({ label: 'DNS 解析', level: lv('dns'), value: !d ? '检测中' : d.status !== 'ok' ? '失败' : `${esc(dnsTitle[d.verdict] || '—')}`, sub: d?.status === 'ok' ? groupResolvers(d.resolvers).slice(0, 2).map(group => `${flag(group.country)}${esc(group.org || group.ip)}${group.count > 1 ? ` ×${group.count}` : ''}`).join(' ') : esc(d?.error || ''), pts: itemPts(result, 'dns'), title: [d?.summary, d?.ecsSummary].filter(Boolean).join('；') });
+  tiles.push({ label: 'DNS 解析', level: lv('dns'), value: !d ? '检测中' : d.status !== 'ok' ? '失败' : `${esc(dnsTitle[d.verdict] || '—')}`, sub: d?.status === 'ok' ? groupResolvers(d.resolvers).slice(0, 2).map(group => `${flag(group.country)}${ipText(group.org || group.ip)}${group.count > 1 ? ` ×${group.count}` : ''}`).join(' ') : esc(d?.error || ''), pts: itemPts(result, 'dns'), title: [d?.summary, d?.ecsSummary].filter(Boolean).join('；') });
   const t = p.tcp;
   tiles.push({ label: 'TCP 连接', level: lv('tcp'), value: !t ? '检测中' : t.status !== 'ok' ? '失败' : t.relay ? '像代理转发' : t.osMismatch ? '系统不一致' : '直连特征', sub: t?.status === 'ok' ? `SYN ≈ ${esc(t.tcpOS)}${t.uaOS ? ` · UA ${esc(t.uaOS)}` : ''}` : esc(t?.error || ''), pts: itemPts(result, 'tcp'), title: t?.summary });
   const env = p.env;
@@ -375,7 +384,7 @@ export function renderASN(run, result) {
       ${row('RPKI', a.rpki ? `<span class="pill pill-${a.rpki === 'valid' ? 'good' : a.rpki === 'invalid' ? 'bad' : 'muted'}">${esc(a.rpki)}</span>` : '—')}
       ${row('ASN 信誉', asnRepTag(run, result))}
       ${row('机器流量', typeof a.botShare === 'number' ? `${pct(a.botShare)} <span class="muted">Cloudflare Radar</span>` : '<span class="muted">未配置 Radar</span>')}
-      ${row('所在网段', prefix ? `<span class="mono">${esc(prefix)}</span>` : '—')}
+      ${row('所在网段', prefix ? `<span class="mono">${ipText(prefix)}</span>` : '—')}
       ${row('登记信息', rdap ? `${esc(rdap.netname || '')} · ${esc(rdap.orgName || '')}${rdap.regDate ? ` · ${esc(rdap.regDate.slice(0, 10))}` : ''}` : '—')}
       ${row('租赁判断', a.lease ? (leaseTag(result) || '<span class="pill pill-good">未见租赁特征</span>') + (a.lease.reasons.length ? ` <span class="muted small">${esc(a.lease.reasons.join('；'))}</span>` : '') : '—')}
     </dl>
@@ -390,13 +399,13 @@ export function renderBreakdown(run, result) {
     <div class="cat cat-bonus">
       <div class="cat-head"><span>安全加分 <small class="muted">基准 ${result.base}</small></span><span class="cat-pts pos">${b.total ? `+${fmt(b.total)}` : '0'} <small>/ 上限 ${b.cap}</small></span></div>
       <div class="bar bar-plus"><i style="width:${Math.min(100, b.total / b.cap * 100)}%"></i></div>
-      ${b.items.length ? `<ul>${b.items.filter(item => !item.live || run.self).map(item => `<li><b>+${fmt(item.pts)}</b><span>${esc(item.label)}</span><small>${esc(item.detail || '')}</small></li>`).join('')}</ul>` : '<p class="muted small">没有足够的正面证据：干净但缺少多源佐证的 IP 停在基准分。</p>'}
+      ${b.items.length ? `<ul>${b.items.filter(item => !item.live || run.self).map(item => `<li><b>+${fmt(item.pts)}</b><span>${esc(item.label)}</span><small>${ipText(item.detail || '')}</small></li>`).join('')}</ul>` : '<p class="muted small">没有足够的正面证据：干净但缺少多源佐证的 IP 停在基准分。</p>'}
     </div>`;
   $('breakdown').innerHTML = bonusBlock + result.categories.filter(category => category.id !== 'live' || run.self).map(category => `
     <div class="cat">
       <div class="cat-head"><span>${esc(category.label)}</span><span class="cat-pts ${category.penalty ? 'neg' : ''}">${category.penalty ? `−${Math.round(category.penalty)}` : '0'} <small>/ 上限 ${category.cap}</small></span></div>
       <div class="bar"><i style="width:${Math.min(100, category.penalty / category.cap * 100)}%"></i></div>
-      ${category.items.length ? `<ul>${category.items.map(item => `<li><b>−${item.pts}</b><span>${esc(item.label)}</span><small>${esc(item.detail || '')}</small></li>`).join('')}</ul>` : '<p class="muted small">无扣分</p>'}
+      ${category.items.length ? `<ul>${category.items.map(item => `<li><b>−${item.pts}</b><span>${esc(item.label)}</span><small>${ipText(item.detail || '')}</small></li>`).join('')}</ul>` : '<p class="muted small">无扣分</p>'}
       ${category.raw > category.cap ? `<p class="muted small">原始扣分 ${category.raw}，按上限封顶。</p>` : ''}
     </div>`).join('') + (result.notes.length ? `<div class="notes">${result.notes.map(item => `<p>${icon(item.level)}${esc(item.text)}</p>`).join('')}</div>` : '');
 }
@@ -501,7 +510,7 @@ function chip({ name, site, status, value, ms, error, listed, note }) {
   const level = status === 'pending' ? 'pending' : status === 'skip' ? 'none' : status !== 'ok' ? 'off' : listed ? 'bad' : 'good';
   return `<a class="src src-${level}" href="${esc(site)}" target="_blank" rel="noopener noreferrer" data-tip="${esc([name, error || value || '', note || '', '点击打开该来源的查询页'].filter(Boolean).join('\n'))}">
     <span class="src-name">${level === 'pending' ? icon('pending') : ''}${esc(name)}</span>
-    <span class="src-val">${status === 'ok' ? esc(value || '✓') : status === 'pending' ? '查询中' : esc(error || '不可用')}</span>
+    <span class="src-val">${status === 'ok' ? ipText(value || '✓') : status === 'pending' ? '查询中' : esc(error || '不可用')}</span>
     ${status === 'ok' && typeof ms === 'number' ? `<span class="src-ms">${ms} ms</span>` : ''}
   </a>`;
 }
@@ -549,8 +558,11 @@ export function crossLinks(ip) {
   $('crosslinks').innerHTML = links.map(([name, url]) => `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(name)} ↗</a>`).join('');
 }
 
-export function applyMask(masked) {
-  document.querySelectorAll('.ipv').forEach(node => { node.textContent = masked ? maskIP(node.dataset.ip) : node.dataset.ip; });
+export function applyMask(on) {
+  masked = on;
+  document.querySelectorAll('.ipv').forEach(node => { node.textContent = on ? maskIP(node.dataset.ip) : node.dataset.ip; });
+  document.querySelectorAll('.ipt').forEach(node => { node.textContent = scrub(node.dataset.raw); });
+  if (tipFor) tipNode.textContent = scrub(tipFor.dataset.tip);
   const input = $('ip-input');
   input.classList.toggle('is-masked', masked && Boolean(input.value));
   $('mask-toggle').textContent = masked ? '显示 IP' : '隐藏 IP';
