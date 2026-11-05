@@ -624,7 +624,7 @@ async function warmPageService() {
   if (Date.now() < pageWarmUntil) return;
   if (!pageWarmup) {
     pageWarmup = (async () => {
-      const response = await fetch(`${PAGE_SERVICE}/health`, { redirect: 'error', signal: AbortSignal.timeout(75000) });
+      const response = await fetch(`${PAGE_SERVICE}/health`, { redirect: 'manual', signal: AbortSignal.timeout(75000) });
       if (!response.ok || (await response.json()).status !== 'ok') throw Error('page-service-unavailable');
       pageWarmUntil = Date.now() + 60000;
     })().finally(() => { pageWarmup = null; });
@@ -636,7 +636,7 @@ async function fetchPageReport(provider, ip) {
   try {
     await warmPageService();
     const response = await fetch(`${PAGE_SERVICE}/lookup/${provider}`, {
-      method: 'POST', redirect: 'error',
+      method: 'POST', redirect: 'manual',
       headers: { 'Content-Type': 'application/json', Origin: DEFAULT_ORIGIN },
       body: JSON.stringify({ ip }), signal: AbortSignal.timeout(110000),
     });
