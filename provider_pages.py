@@ -1,6 +1,5 @@
 """Bounded, fixed-site browser fallbacks for unavailable provider records."""
 import asyncio
-import os
 import time
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -27,12 +26,7 @@ async def _lookup(ip):
     extractor = (Path(__file__).parent / "src" / "page-extract.js").read_text(encoding="utf-8").replace("export function", "function")
     evaluate = "({provider,ip,raw}) => {" + extractor + "; return extractProviderPage(provider,ip,raw); }"
     async with async_playwright() as api:
-        # Use an ordinary Chromium window. Linux containers provide a virtual display;
-        # Windows keeps this short-lived lookup window outside the desktop workspace.
-        headed = os.name == "nt" or bool(os.environ.get("DISPLAY"))
-        options = {"headless": not headed}
-        if os.name == "nt":
-            options["args"] = ["--window-position=-32000,-32000"]
+        options = {"headless": True}
         if not Path(api.chromium.executable_path).exists():
             options["channel"] = "chrome"
         browser = await api.chromium.launch(**options)
