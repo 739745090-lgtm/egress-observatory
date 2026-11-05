@@ -421,6 +421,7 @@ export function renderGeo(run, result) {
 
 function sourceValue(id, d) {
   if (!d) return '';
+  if (Number.isFinite(d.webRiskScore)) return '风险值 '+d.webRiskScore+'/100';
   if (Number.isFinite(d.webRiskPercent)) return '网页风险 '+d.webRiskPercent+'%';
   if (d.importedFields?.length && !d.country && d.risk == null) return [UT_LABEL[d.usageType],UT_LABEL[d.companyType]].filter(Boolean).join(' / ');
   switch (id) {

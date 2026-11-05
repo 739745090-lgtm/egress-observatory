@@ -10,7 +10,7 @@ import { fetchASN, inferASN, detectLease } from './asn.js';
 import { detectEgress, summarizeEgress, probeWebRTC, probeDNS, classifyDNS, probeTCP, probeEnvironment, probeIPv6, classifyIPv6, traceProbe } from './probes.js';
 import { runTurnstile, runRecaptcha } from './captcha.js';
 import { score } from './score.js';
-import * as view from './render.js?v=cloud2';
+import * as view from './render.js?v=cloud3';
 
 const $ = id => document.getElementById(id);
 const app = {
@@ -218,7 +218,7 @@ async function startRun(input, fetchPages = true) {
       }
       const row = ipokRows[id];
       if (row && !row.unavailable && record.status !== 'ok') {
-        data = fillSource(data, {flags:row.flags, webRiskPercent:row.percent}, 'IPOK 逐库观察'+(row.observedAt ? ' · '+row.observedAt : ''));
+        data = fillSource(data, {flags:row.flags, webRiskScore:row.percent, webObservedAt:row.observedAt}, 'IPOK 逐库观察'+(row.observedAt ? ' · '+row.observedAt : ''));
       }
       data = supplementTypes(data, webTypes(parsed.ip, id));
       if (row?.unavailable && data.status !== 'ok') data = {...data,error:row.reason === 'cached_only' ? '网页暂无该 IP 的缓存记录' : '网页来源暂缺 · '+row.reason};
