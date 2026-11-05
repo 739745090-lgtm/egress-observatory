@@ -92,6 +92,9 @@ export const SOURCES = [
       const { data } = await json(`${API_BASE}/v1/abuseipdb?ip=${encodeURIComponent(ip)}`, ctx);
       const record = workerRecord(data, ip);
       record.reports = num(data.reports); record.lastReported = text(data.lastReported);
+      record.rawUsageType = text(data.usageType);
+      record.type = record.usageType;
+      record.sourceNote = '国家、ISP 和使用类型来自 IPinfo；举报记录和滥用置信分来自 AbuseIPDB。';
       if (data.block) record.block = { prefix: text(data.block.prefix), reported: num(data.block.reported) || 0, maxScore: num(data.block.maxScore) };
       return record;
     },

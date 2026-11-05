@@ -52,6 +52,7 @@ export const SOURCE_WEIGHTS = Object.freeze({
 
 /** Geo databases that share an upstream count once in the location vote. */
 export const GEO_FAMILY = Object.freeze({
+  abuseipdb: 'ipinfo',
   ipsb: 'maxmind', ipleak: 'maxmind', maxmind: 'maxmind', geojs: 'maxmind',
   dbip: 'dbip', freeipapi: 'dbip', netatlas: 'dbip', ipapi: 'ipapi', ipapimirror: 'ipapi',
 });
@@ -226,6 +227,7 @@ export function score(evidence) {
   const typeVotes = [];
   for (const source of sources) {
     if (!source.type) continue;
+    if (source.id === 'abuseipdb' && sources.some(item => item.id === 'ipinfo' && item.type)) continue;
     const w = (SOURCE_WEIGHTS[source.id] || {}).type ?? 0.5;
     typeVotes.push({ value: source.type, w, by: source.name });
     const hasHostingFlag = typeof source.flags?.hosting === 'boolean';
